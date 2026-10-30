@@ -30,6 +30,34 @@ SPEC = {
 K_DEF = {"Latasir": 2.5, "Lataston": 2.5, "Laston": 0.75}
 K_RNG = {"Latasir": (2.0, 3.0), "Lataston": (2.0, 3.0), "Laston": (0.5, 1.0)}
 
+# Syarat Marshall Laston (Spesifikasi Umum 2018): (min, maks); None = tidak dibatasi
+_MQ = (250.0, None)
+MSPEC = {
+    "Laston AC-WC": {"VIM (%)": (3.0, 5.0), "VMA (%)": (15.0, None), "VFA (%)": (65.0, None),
+                     "Stabilitas (kg)": (800.0, None), "Flow (mm)": (2.0, 4.0), "MQ (kg/mm)": _MQ},
+    "Laston AC-BC": {"VIM (%)": (3.0, 5.0), "VMA (%)": (14.0, None), "VFA (%)": (65.0, None),
+                     "Stabilitas (kg)": (800.0, None), "Flow (mm)": (2.0, 4.0), "MQ (kg/mm)": _MQ},
+    "Laston AC-Base": {"VIM (%)": (3.0, 5.0), "VMA (%)": (13.0, None), "VFA (%)": (65.0, None),
+                       "Stabilitas (kg)": (1800.0, None), "Flow (mm)": (3.0, 6.0), "MQ (kg/mm)": _MQ},
+}
+MPARAMS = ["VIM (%)", "VMA (%)", "VFA (%)", "Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)"]
+
+# Angka korelasi beban stabilitas (SNI 06-2489-1991): (isi min, isi maks cm3, angka korelasi)
+KORELASI = [(200, 213, 5.56), (214, 225, 5.00), (226, 237, 4.55), (238, 250, 4.17), (251, 264, 3.85),
+            (265, 276, 3.57), (277, 289, 3.33), (290, 301, 3.03), (302, 316, 2.78), (317, 328, 2.50),
+            (329, 340, 2.27), (341, 353, 2.08), (354, 367, 1.92), (368, 379, 1.79), (380, 392, 1.67),
+            (393, 405, 1.56), (406, 420, 1.47), (421, 431, 1.39), (432, 443, 1.32), (444, 456, 1.25),
+            (457, 470, 1.19), (471, 482, 1.14), (483, 495, 1.09), (496, 508, 1.04), (509, 522, 1.00),
+            (523, 535, 0.96), (536, 546, 0.93), (547, 559, 0.89), (560, 573, 0.86), (574, 585, 0.83),
+            (586, 598, 0.81), (599, 610, 0.78), (611, 625, 0.76)]
+
+
+def f_korelasi(vol):
+    """Angka korelasi dengan interpolasi linear antar titik tengah rentang isi benda uji."""
+    xs = [(a + b) / 2 for a, b, _ in KORELASI]
+    ys = [c for _, _, c in KORELASI]
+    return round(float(np.interp(vol, xs, ys)), 2)
+
 # Saringan hasil praktikum (mm); baris terakhir tabel input = pan
 LAB = [76.2, 63.5, 50.8, 37.5, 19, 12.5, 9.5, 4.75, 2.36, 1.18, 0.6, 0.3, 0.15, 0.075]
 
@@ -134,6 +162,30 @@ def plot(mix, xs=None, ys=None, mids=False):
     return fig
 
 
+def plot_marshall(ra, specs, kao=None):
+    fig, axes = plt.subplots(2, 3, figsize=(12, 7))
+    fig.patch.set_facecolor("#FBF5EC")
+    for ax, p in zip(axes.ravel(), ["Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)", "VMA (%)", "VIM (%)", "VFA (%)"]):
+        ax.set_facecolor("#FFFDF9")
+        d = ra[["Kadar Aspal (%)", p]].dropna()
+        if not d.empty:
+            ax.plot(d["Kadar Aspal (%)"], d[p], "o-", color="#E07B39", lw=2, label="Hasil uji")
+        lo, hi = specs.get(p, (np.nan, np.nan))
+        if not pd.isna(lo):
+            ax.axhline(lo, color="#5C3317", ls="--", lw=1.5, label="Syarat min")
+        if not pd.isna(hi):
+            ax.axhline(hi, color="#B08968", ls="--", lw=1.5, label="Syarat maks")
+        if kao is not None:
+            ax.axvline(kao, color="#2E7D32", ls=":", lw=1.8, label="KAO")
+        ax.set_title(p, fontsize=10)
+        ax.set_xlabel("Kadar Aspal (%)")
+        ax.grid(True, alpha=0.4)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
 def show_fig(fig, name):
     st.pyplot(fig)
     buf = io.BytesIO()
@@ -215,9 +267,9 @@ if not lo_k <= K <= hi_k:
     st.sidebar.warning("K di luar rentang yang lazim.")
 sp = SPEC[mix]
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["1. Analisis Saringan", "2. Gradasi Rencana",
-                                        "3. Kadar Aspal, Berat & Koreksi",
-                                        "4. Pusat Bantuan & Panduan", "5. Riwayat Akses (Admin)"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["1. Analisis Saringan", "2. Gradasi Rencana",
+                                              "3. Kadar Aspal, Berat & Koreksi", "4. Uji Marshall & KAO",
+                                              "5. Pusat Bantuan & Panduan", "6. Riwayat Akses (Admin)"])
 
 # ------------------------------------------------------------------ tab 1
 with tab1:
@@ -237,7 +289,7 @@ with tab1:
     m = ed["Massa Tertahan (gr)"].fillna(0).astype(float).values
     tot = m.sum()
     if tot <= 0:
-        st.warning("Isi massa tertahan terlebih dahulu. Butuh petunjuk? Buka tab 4 (Pusat Bantuan & Panduan).")
+        st.warning("Isi massa tertahan terlebih dahulu. Butuh petunjuk? Buka tab 5 (Pusat Bantuan & Panduan).")
         df1 = None
     else:
         cum = np.cumsum(m)
@@ -312,6 +364,8 @@ with tab3:
     Pbr = float(np.floor(Pb * 2 + 0.5) / 2)
 
     st.subheader("Kadar aspal estimasi")
+    st.info("Ini **kadar aspal estimasi (Pb)**, yaitu perkiraan awal dari rumus, **bukan kadar aspal optimum**. "
+            "Kadar optimum ditentukan lewat uji Marshall dengan beberapa variasi kadar aspal (lihat tabel variasi di bawah).")
     a, b, c, d = st.columns(4)
     a.metric("AK (tertahan 2,36)", f"{AK:.2f}%")
     b.metric("AH (lolos 2,36 - lolos 0,075)", f"{AH:.2f}%")
@@ -348,6 +402,23 @@ with tab3:
     st.dataframe(df4.round(2), hide_index=True, width="stretch")
     st.caption("Koreksi: persentase agregat dikalikan (1 - kadar aspal), lalu ditambah aspal sehingga total 100%.")
 
+    st.subheader("Variasi kadar aspal untuk benda uji Marshall")
+    st.caption("Lima kadar aspal di sekitar kadar yang dipakai (selisih 0,5%). Timbang bahan sesuai tabel untuk membuat benda uji, "
+               "lalu tentukan kadar optimum dari hasil uji Marshall. Berat campuran per benda uji = berat campuran di sidebar.")
+    kadar_list = [round(kadar + d, 2) for d in (-1.0, -0.5, 0.0, 0.5, 1.0)]
+    kadar_list = [k for k in kadar_list if 0 < k < 100]
+    labels = ["Pb -1", "Pb -0,5", "Pb", "Pb +0,5", "Pb +1"][-len(kadar_list):] if len(kadar_list) == 5 else [f"{k:g}%" for k in kadar_list]
+    dv1 = pd.DataFrame({"Variasi": labels, "Kadar Aspal (%)": kadar_list,
+                        "Berat Aspal (gr)": [k / 100 * W for k in kadar_list],
+                        "Berat Agregat (gr)": [W - k / 100 * W for k in kadar_list]})
+    st.dataframe(dv1.round(2), hide_index=True, width="stretch")
+    dv2 = pd.DataFrame({"Saringan (mm)": [f"{x:g}" for x in S] + ["Pan"]})
+    for k in kadar_list:
+        dv2[f"{k:g}% (gr)"] = rp / 100 * (W - k / 100 * W)
+    dv2.loc[len(dv2)] = ["Jumlah"] + [dv2[c].sum() for c in dv2.columns[1:]]
+    st.markdown("**Berat agregat tertahan tiap saringan untuk tiap kadar aspal**")
+    st.dataframe(dv2.round(2), hide_index=True, width="stretch")
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         if df1 is not None:
@@ -360,13 +431,207 @@ with tab3:
                      ).to_excel(xw, sheet_name="Kadar Aspal", index=False)
         df3.round(2).to_excel(xw, sheet_name="Berat per Saringan", index=False)
         df4.round(2).to_excel(xw, sheet_name="Koreksi", index=False)
+        dv1.round(2).to_excel(xw, sheet_name="Variasi Kadar Aspal", index=False)
+        dv2.round(2).to_excel(xw, sheet_name="Variasi Berat Saringan", index=False)
     st.download_button("Unduh hasil (Excel)", buf.getvalue(), "hasil_gradaspal.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ------------------------------------------------------------------ tab 4: Marshall
+with tab4:
+    st.subheader("Perhitungan Uji Marshall dan Kadar Aspal Optimum (KAO)")
+    st.caption("Semua isian kosong di awal. Isi data hasil pengujian benda uji, lalu aplikasi menghitung stabilitas, flow, MQ, "
+               "VMA, VIM, VFA, menampilkan grafik, dan menentukan KAO.")
+    msv = sv.get("marshall") or {}
+    mp = msv.get("params") or {}
+
+    def pnum(label, key, help_=None):
+        v = mp.get(key)
+        return st.number_input(label, min_value=0.0, value=float(v) if v else None, step=0.001, format="%.4f",
+                               placeholder="Isi", help=help_, key=f"m_{key}_{tag}")
+
+    st.markdown("**1. Berat jenis bahan**")
+    r1 = st.columns(3)
+    with r1[0]:
+        bulk_k = pnum("BJ bulk agregat kasar", "kasar_bulk")
+    with r1[1]:
+        bulk_h = pnum("BJ bulk agregat halus", "halus_bulk")
+    with r1[2]:
+        bulk_f = pnum("BJ bulk filler", "filler_bulk")
+    r2 = st.columns(3)
+    with r2[0]:
+        semu_k = pnum("BJ semu agregat kasar", "kasar_semu")
+    with r2[1]:
+        semu_h = pnum("BJ semu agregat halus", "halus_semu")
+    with r2[2]:
+        semu_f = pnum("BJ semu filler", "filler_semu")
+    r3 = st.columns(3)
+    with r3[0]:
+        bj_asp = pnum("BJ aspal", "aspal")
+    with r3[1]:
+        kal_in = pnum("Faktor kalibrasi alat (per skala pembacaan)", "kal",
+                      "Faktor proving ring dari alat Marshall di laboratoriummu.")
+    with r3[2]:
+        unit = st.radio("Satuan faktor kalibrasi", ["kg", "lbs"], horizontal=True,
+                        index=1 if mp.get("unit") == "lbs" else 0, key=f"m_unit_{tag}",
+                        help="Jika faktor di modulmu dalam lbs, pilih lbs. Aplikasi mengubahnya ke kg (x 0,45359).")
+    kal_kg = (kal_in * 0.45359237 if unit == "lbs" else kal_in) if kal_in else None
+    if kal_kg:
+        st.caption(f"Faktor kalibrasi yang dipakai: {kal_kg:.4f} kg per skala.")
+
+    p475 = mids[S.index(4.75)]
+    pCA, pFA, pFF = 100 - p475, p475 - mids[S.index(0.075)], mids[S.index(0.075)]
+    st.caption(f"Proporsi agregat dari gradasi rencana {mix} (terhadap total agregat): "
+               f"kasar (tertahan 4,75 mm) {pCA:.2f}%, halus {pFA:.2f}%, filler {pFF:.2f}%.")
+    bj_ok = all(v for v in (bulk_k, bulk_h, bulk_f, semu_k, semu_h, semu_f, bj_asp))
+    Gsb = Gse = Gsa = None
+    if bj_ok:
+        Gsb = 100 / (pCA / bulk_k + pFA / bulk_h + pFF / bulk_f)
+        Gsa = 100 / (pCA / semu_k + pFA / semu_h + pFF / semu_f)
+        Gse = 100 / (pCA / ((bulk_k + semu_k) / 2) + pFA / ((bulk_h + semu_h) / 2) + pFF / ((bulk_f + semu_f) / 2))
+        g1, g2, g3 = st.columns(3)
+        g1.metric("BJ bulk agregat gabungan", f"{Gsb:.4f}")
+        g2.metric("BJ semu agregat gabungan", f"{Gsa:.4f}")
+        g3.metric("BJ efektif agregat gabungan", f"{Gse:.4f}")
+    else:
+        st.info("Isi semua berat jenis (bulk, semu, aspal) agar VMA, VIM, dan VFA bisa dihitung.")
+
+    st.markdown("**2. Syarat spesifikasi**")
+    base_sp = MSPEC.get(mix, {})
+    sdf = pd.DataFrame({"Parameter": MPARAMS,
+                        "Min": [(base_sp.get(p) or (None, None))[0] if base_sp.get(p) and base_sp[p][0] is not None else np.nan for p in MPARAMS],
+                        "Maks": [(base_sp.get(p) or (None, None))[1] if base_sp.get(p) and base_sp[p][1] is not None else np.nan for p in MPARAMS]})
+    if base_sp:
+        st.caption(f"Syarat {mix} sesuai Spesifikasi Umum 2018 (Tabel 12.1 laporan). Boleh diubah jika modulmu berbeda.")
+    else:
+        st.caption(f"Syarat untuk {mix} belum terisi otomatis. Isi sendiri sesuai spesifikasi yang kamu pakai.")
+    sed = st.data_editor(sdf, hide_index=True, disabled=["Parameter"], width="stretch", key=f"ms_{tag}_{mix}",
+                         column_config={"Min": st.column_config.NumberColumn("Min", format="%.2f"),
+                                        "Maks": st.column_config.NumberColumn("Maks", format="%.2f")})
+    specs = {r_["Parameter"]: (r_["Min"], r_["Maks"]) for _, r_ in sed.iterrows()}
+
+    st.markdown("**3. Data benda uji**")
+    st.caption("Satu baris per benda uji. Boleh lebih dari satu benda uji per kadar aspal (hasilnya dirata-rata). "
+               "Tambah baris lewat tombol + di bawah tabel. Kadar aspal terhadap campuran. Kosongkan angka korelasi agar dihitung otomatis dari volume.")
+    cols_m = ["Kadar Aspal (%)", "Berat Kering (gr)", "Berat SSD (gr)", "Berat dalam Air (gr)",
+              "Pembacaan Stabilitas", "Flow (mm)", "Angka Korelasi (opsional)"]
+    saved_rows = msv.get("rows") or []
+    if saved_rows:
+        base_m = pd.DataFrame(saved_rows, columns=cols_m).astype(float)
+    else:
+        base_m = pd.DataFrame({c_: [np.nan] * 5 for c_ in cols_m})
+    ed_m = st.data_editor(base_m, num_rows="dynamic", hide_index=True, width="stretch", key=f"mr_{tag}",
+                          column_config={c_: st.column_config.NumberColumn(c_, min_value=0.0, format="%.3f") for c_ in cols_m})
+
+    recs, warn_vol = [], []
+    for i_, rw in ed_m.reset_index(drop=True).iterrows():
+        pbv, bk_, bs_, ba_ = rw[cols_m[0]], rw[cols_m[1]], rw[cols_m[2]], rw[cols_m[3]]
+        if any(pd.isna(x) for x in (pbv, bk_, bs_, ba_)) or bs_ - ba_ <= 0 or not 0 < pbv < 100:
+            continue
+        vol = bs_ - ba_
+        gmb = bk_ / vol
+        rec = {"No": i_ + 1, "Kadar Aspal (%)": float(pbv), "Volume (cm3)": vol, "BJ Bulk Campuran": gmb}
+        if bj_ok:
+            ps = 100 - pbv
+            gmm = 100 / (ps / Gse + pbv / bj_asp)
+            vma = 100 - gmb * ps / Gsb
+            vim = 100 * (gmm - gmb) / gmm
+            rec.update({"BJ Teoritis Maks": gmm, "VMA (%)": vma, "VIM (%)": vim, "VFA (%)": 100 * (vma - vim) / vma})
+        if not 200 <= vol <= 625:
+            warn_vol.append(i_ + 1)
+        fk = rw[cols_m[6]] if not pd.isna(rw[cols_m[6]]) else f_korelasi(vol)
+        rec["Angka Korelasi"] = fk
+        rd_, fl_ = rw[cols_m[4]], rw[cols_m[5]]
+        if kal_kg and not pd.isna(rd_):
+            rec["Stabilitas (kg)"] = rd_ * kal_kg * fk
+            if not pd.isna(fl_) and fl_ > 0:
+                rec["Flow (mm)"] = fl_
+                rec["MQ (kg/mm)"] = rec["Stabilitas (kg)"] / fl_
+        elif not pd.isna(fl_):
+            rec["Flow (mm)"] = fl_
+        recs.append(rec)
+
+    ra = None
+    kao = None
+    rm = pd.DataFrame(recs)
+    if rm.empty:
+        st.info("Isi data benda uji (kadar aspal, berat kering, berat SSD, berat dalam air) untuk melihat hasil.")
+    else:
+        for pcol in MPARAMS:
+            if pcol not in rm.columns:
+                rm[pcol] = np.nan
+        if warn_vol:
+            st.warning(f"Volume benda uji nomor {', '.join(map(str, warn_vol))} di luar rentang tabel korelasi (200-625 cm3). "
+                       "Cek kembali berat SSD dan berat dalam air.")
+        if not kal_kg:
+            st.info("Isi faktor kalibrasi alat agar stabilitas dan MQ dihitung.")
+        st.markdown("**Hasil per benda uji**")
+        show_cols = [c_ for c_ in ["No", "Kadar Aspal (%)", "Volume (cm3)", "BJ Bulk Campuran", "BJ Teoritis Maks", "VMA (%)", "VIM (%)",
+                                   "VFA (%)", "Angka Korelasi", "Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)"] if c_ in rm.columns]
+        st.dataframe(rm[show_cols].round(3), hide_index=True, width="stretch")
+
+        ra = rm.groupby("Kadar Aspal (%)", as_index=False).agg(
+            **{"Jumlah Benda Uji": ("No", "count")}, **{p_: (p_, "mean") for p_ in MPARAMS})
+        st.markdown("**Rata-rata per kadar aspal**")
+        st.dataframe(ra.round(3), hide_index=True, width="stretch")
+
+        def lolos(p_, v_):
+            lo_, hi_ = specs.get(p_, (np.nan, np.nan))
+            if pd.isna(lo_) and pd.isna(hi_):
+                return None
+            if pd.isna(v_):
+                return False
+            if not pd.isna(lo_) and v_ < lo_ - 1e-9:
+                return False
+            if not pd.isna(hi_) and v_ > hi_ + 1e-9:
+                return False
+            return True
+
+        stat_rows, pass_flags = [], []
+        for _, rw in ra.iterrows():
+            oks = [lolos(p_, rw[p_]) for p_ in MPARAMS]
+            pass_flags.append(any(o is not None for o in oks) and all(o in (True, None) for o in oks))
+            stat_rows.append([rw["Kadar Aspal (%)"]] + ["-" if o is None else ("Memenuhi" if o else "Tidak") for o in oks]
+                             + ["Ya" if pass_flags[-1] else "Tidak"])
+        st.markdown("**Pengecekan terhadap syarat**")
+        st.dataframe(pd.DataFrame(stat_rows, columns=["Kadar Aspal (%)"] + MPARAMS + ["Semua memenuhi"]),
+                     hide_index=True, width="stretch")
+
+        cand = ra[pd.Series(pass_flags, index=ra.index)]
+        st.subheader("Kadar aspal optimum (KAO)")
+        if all(pd.isna(lo_) and pd.isna(hi_) for lo_, hi_ in specs.values()):
+            st.info("Isi syarat spesifikasi (langkah 2) agar KAO bisa ditentukan.")
+        elif cand.empty:
+            st.warning("KAO belum dapat ditentukan: belum ada kadar aspal yang memenuhi semua syarat spesifikasi. "
+                       "Lihat tabel pengecekan untuk mengetahui parameter mana yang belum terpenuhi.")
+        else:
+            if cand["Stabilitas (kg)"].notna().any():
+                kao = float(cand.loc[cand["Stabilitas (kg)"].idxmax(), "Kadar Aspal (%)"])
+            else:
+                kao = float(cand["Kadar Aspal (%)"].median())
+            st.success(f"KAO = {kao:g}%  (kadar yang memenuhi semua syarat dengan stabilitas tertinggi). "
+                       f"Kadar yang memenuhi semua syarat: {', '.join(f'{x:g}%' for x in cand['Kadar Aspal (%)'])}.")
+            st.caption("Cara menentukan KAO bisa berbeda antar modul atau dosen. Di sini mengikuti metode laporan: "
+                       "kadar yang memenuhi semua syarat dengan stabilitas tertinggi.")
+        show_fig(plot_marshall(ra, specs, kao), "grafik_marshall")
+
+        mbuf = io.BytesIO()
+        with pd.ExcelWriter(mbuf, engine="openpyxl") as xw:
+            rm[show_cols].round(4).to_excel(xw, sheet_name="Per Benda Uji", index=False)
+            ra.round(4).to_excel(xw, sheet_name="Rata-rata", index=False)
+            pd.DataFrame(stat_rows, columns=["Kadar Aspal (%)"] + MPARAMS + ["Semua memenuhi"]).to_excel(
+                xw, sheet_name="Pengecekan Syarat", index=False)
+        st.download_button("Unduh hasil Marshall (Excel)", mbuf.getvalue(), "hasil_marshall.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_marshall")
+
+mparams = {"kasar_bulk": bulk_k, "halus_bulk": bulk_h, "filler_bulk": bulk_f, "kasar_semu": semu_k,
+           "halus_semu": semu_h, "filler_semu": semu_f, "aspal": bj_asp, "kal": kal_in, "unit": unit}
+mrows = [{k_: (None if pd.isna(v_) else float(v_)) for k_, v_ in r_.items()} for r_ in ed_m.to_dict("records")]
 
 # ------------------------------------------- arsip pekerjaan (unduh)
 arsip_out = {"app": "GradAspal", "versi": 1, "judul": judul.strip(), "mix": mix, "fam": fam,
              "W": float(W), "K": float(K), "massa": [float(v) for v in m], "kadar": float(kadar),
-             "kadar_key": f"{mix}|{K}", "diperbarui": now_wib()}
+             "kadar_key": f"{mix}|{K}", "diperbarui": now_wib(),
+             "marshall": {"params": mparams, "rows": mrows}}
 slug = re.sub(r"[^a-z0-9]+", "_", (judul.strip() or mix).lower()).strip("_") or "arsip"
 st.sidebar.download_button("💾 Simpan arsip pekerjaan", json.dumps(arsip_out, ensure_ascii=False, indent=1).encode("utf-8"),
                            f"gradaspal_{slug}_{datetime.now(timezone(timedelta(hours=7))).strftime('%Y%m%d')}.json",
@@ -375,8 +640,8 @@ st.sidebar.download_button("💾 Simpan arsip pekerjaan", json.dumps(arsip_out, 
 if sv.get("diperbarui"):
     st.sidebar.caption(f"Arsip dibuka, terakhir disimpan: {sv['diperbarui']}")
 
-# ------------------------------------------------------------------ tab 4: bantuan
-with tab4:
+# ------------------------------------------------------------------ tab 5: bantuan
+with tab5:
     st.subheader("Pusat Bantuan & Panduan Penggunaan")
     p1, p2, p3 = st.tabs(["Panduan Langkah demi Langkah", "Tanya Jawab (FAQ)", "Istilah & Rumus"])
 
@@ -403,6 +668,12 @@ with tab4:
 - Aplikasi menghitung **Pb estimasi** dan membulatkannya ke 0,5% terdekat.
 - Kamu boleh mengganti **kadar aspal yang dipakai**.
 - Berat aspal, berat agregat, berat tertahan tiap saringan, dan koreksi dihitung otomatis.
+- Tabel **Variasi kadar aspal** memberi berat bahan untuk lima kadar (Pb -1 sampai Pb +1) untuk membuat benda uji Marshall.
+
+**Langkah 5b - Tab 4: Uji Marshall & KAO**
+- Isi berat jenis bahan (bulk, semu, aspal) dan faktor kalibrasi alat.
+- Isi data tiap benda uji: kadar aspal, berat kering, berat SSD, berat dalam air, pembacaan stabilitas, dan flow.
+- Aplikasi menghitung VMA, VIM, VFA, stabilitas, flow, dan MQ, lalu mengecek syarat dan menentukan **KAO**.
 
 **Langkah 6 - Simpan hasil**
 - Klik **Unduh grafik (PNG)** untuk gambar dan **Unduh hasil (Excel)** untuk semua tabel.
@@ -428,6 +699,19 @@ with tab4:
         with st.expander("MHB-ku di luar syarat. Salah di mana?"):
             st.write("Periksa urutan saringan dan angka massa (satuan gram). Syarat MHB: pasir 1,5-3,8 dan kerikil 5,0-8,0. "
                      "Jika sampelmu campuran, nilainya bisa di antara keduanya, sehingga ditandai di luar syarat.")
+        with st.expander("Apakah hasil aplikasi ini kadar aspal optimum?"):
+            st.write("Bukan. Aplikasi menghitung kadar aspal estimasi (Pb) dari rumus sebagai titik awal. "
+                     "Kadar optimum ditentukan dari uji Marshall pada benda uji dengan lima variasi kadar aspal "
+                     "(Pb -1, -0,5, Pb, +0,5, +1). Tabel berat bahan untuk kelima variasi itu ada di Tab 3, dan perhitungan Marshall serta penentuan KAO ada di Tab 4.")
+        with st.expander("Faktor kalibrasi alat Marshall: kg atau lbs?"):
+            st.write("Faktor kalibrasi (proving ring) bisa tertulis dalam lbs. Pilih satuannya di Tab 4 dan aplikasi akan "
+                     "mengubahnya ke kg (1 lbs = 0,45359 kg). Stabilitas dihitung = pembacaan x faktor kalibrasi (kg) x angka korelasi.")
+        with st.expander("Dari mana angka korelasi stabilitas?"):
+            st.write("Otomatis dari volume benda uji (berat SSD - berat dalam air) memakai tabel SNI 06-2489-1991 dengan "
+                     "interpolasi. Jika modulmu memberi angka lain, isi kolom Angka Korelasi (opsional) di tabel benda uji.")
+        with st.expander("Kenapa KAO belum muncul?"):
+            st.write("KAO hanya muncul jika ada kadar aspal yang memenuhi semua syarat (VIM, VMA, VFA, stabilitas, flow, MQ). "
+                     "Lihat tabel Pengecekan terhadap syarat di Tab 4 untuk tahu parameter mana yang belum terpenuhi.")
         with st.expander("Apa itu konstanta K dan berapa nilainya?"):
             st.write("K adalah konstanta yang bergantung jenis campuran dan dipakai di rumus Pb. "
                      "Latasir dan Lataston: 2,0-3,0. Laston: 0,5-1,0. Nilai awal aplikasi: 2,5 / 2,5 / 0,75.")
@@ -451,7 +735,13 @@ with tab4:
 | **AK** | Agregat kasar: persen tertahan saringan 2,36 mm |
 | **AH** | Agregat halus: persen lolos 2,36 mm dikurangi persen lolos 0,075 mm |
 | **F** | Filler: persen lolos saringan 0,075 mm |
-| **Pb** | Kadar aspal estimasi |
+| **Pb** | Kadar aspal estimasi (perkiraan awal dari rumus, bukan kadar optimum) |
+| **Kadar aspal optimum** | Kadar aspal yang memenuhi semua syarat spesifikasi berdasarkan uji Marshall |
+| **Uji Marshall** | Pengujian benda uji aspal dengan beberapa variasi kadar aspal (stabilitas, flow, VIM, VMA, VFA) untuk menentukan kadar optimum |
+| **Gmb / Gsb / Gse / Gmm** | BJ bulk campuran / BJ bulk agregat gabungan / BJ efektif agregat gabungan / BJ teoritis maksimum campuran |
+| **VIM / VMA / VFA** | Rongga dalam campuran / rongga dalam agregat / rongga terisi aspal |
+| **MQ** | Marshall Quotient: stabilitas dibagi flow |
+| **KAO** | Kadar aspal optimum |
 | **Pan** | Wadah penampung butir yang lolos saringan terkecil |
 
 **Rumus kadar aspal estimasi**
@@ -466,8 +756,8 @@ with tab4:
     st.divider()
     st.markdown("**Masih butuh bantuan?** Hubungi pengelola aplikasi (isi kontak di sini, misalnya WhatsApp atau email dosen/admin).")
 
-# ------------------------------------------------------------------ tab 5: admin
-with tab5:
+# ------------------------------------------------------------------ tab 6: admin
+with tab6:
     st.subheader("Riwayat akses pengguna")
     kode = st.text_input("Kode admin", type="password", key="admin_code")
     if kode and kode == ADMIN_CODE:
