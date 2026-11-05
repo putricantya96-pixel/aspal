@@ -1,4 +1,4 @@
-"""GradAspal - Perencanaan Gradasi Agregat & Kadar Aspal Estimasi
+"""GradAspal - Perencanaan Gradasi Agregat, Kadar Aspal Estimasi & Kadar Aspal Optimum (Marshall)
 Latasir, Lataston, Laston.  Jalankan: streamlit run app.py
 """
 import csv
@@ -214,7 +214,7 @@ st.markdown("""
 </style>
 <div class="hero">
   <h1>🛣️ GradAspal</h1>
-  <p>Perencanaan gradasi agregat dan kadar aspal estimasi untuk Latasir, Lataston, dan Laston</p>
+  <p>Perencanaan gradasi agregat, kadar aspal estimasi, dan kadar aspal optimum (uji Marshall) untuk Latasir, Lataston, dan Laston</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -365,7 +365,7 @@ with tab3:
 
     st.subheader("Kadar aspal estimasi")
     st.info("Ini **kadar aspal estimasi (Pb)**, yaitu perkiraan awal dari rumus, **bukan kadar aspal optimum**. "
-            "Kadar optimum ditentukan lewat uji Marshall dengan beberapa variasi kadar aspal (lihat tabel variasi di bawah).")
+            "Kadar optimum (KAO) ditentukan lewat uji Marshall di **Tab 4**, memakai variasi kadar aspal pada tabel di bawah.")
     a, b, c, d = st.columns(4)
     a.metric("AK (tertahan 2,36)", f"{AK:.2f}%")
     b.metric("AH (lolos 2,36 - lolos 0,075)", f"{AH:.2f}%")
