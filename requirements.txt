@@ -1,5 +1,5 @@
-streamlit>=1.50
-openpyxl
-matplotlib
-numpy
+streamlit
 pandas
+numpy
+openpyxl
+plotly

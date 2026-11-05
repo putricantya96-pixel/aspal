@@ -9,10 +9,19 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
+from openpyxl import Workbook
+from openpyxl.chart import Reference, ScatterChart, Series
+from openpyxl.chart.axis import ChartLines
+from openpyxl.chart.marker import Marker
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter as CL
+from openpyxl.worksheet.datavalidation import DataValidation
+from plotly.subplots import make_subplots
 
 # Saringan spesifikasi (mm) dan batas gradasi % lolos (BB, BA)
 S = [37.5, 25, 19, 12.5, 9.5, 4.75, 2.36, 1.18, 0.6, 0.3, 0.15, 0.075]
@@ -133,65 +142,583 @@ def saran(sz, v, lo, hi):
             f"Terlalu sedikit butir halus. Tambah fraksi halus yang lolos saringan {sz:g} mm, atau kurangi fraksi kasar.")
 
 
+C_BB, C_BA, C_MID, C_SMP = "#5C3317", "#B08968", "#8B5A2B", "#E07B39"
+BG_PAPER, BG_PLOT = "#FBF5EC", "#FFFDF9"
+
+
 def plot(mix, xs=None, ys=None, mids=False):
     sp = SPEC[mix]
     x = [s for s in S if s in sp]
-    fig, ax = plt.subplots(figsize=(9, 5))
-    fig.patch.set_facecolor("#FBF5EC")
-    ax.set_facecolor("#FFFDF9")
     lo_v, hi_v = [sp[s][0] for s in x], [sp[s][1] for s in x]
-    ax.fill_between(x, lo_v, hi_v, color="#E6CCB2", alpha=0.55, label="Daerah spesifikasi")
-    ax.plot(x, lo_v, "o-", color="#5C3317", lw=2, label="BB")
-    ax.plot(x, hi_v, "o-", color="#B08968", lw=2, label="BA")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x + x[::-1], y=hi_v + lo_v[::-1], fill="toself", mode="none",
+                             fillcolor="rgba(230,204,178,0.55)", name="Daerah spesifikasi", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=lo_v, mode="lines+markers", name="BB", line=dict(color=C_BB, width=2.5),
+                             marker=dict(size=8), hovertemplate="BB<br>%{x:g} mm: %{y:g}%<extra></extra>"))
+    fig.add_trace(go.Scatter(x=x, y=hi_v, mode="lines+markers", name="BA", line=dict(color=C_BA, width=2.5),
+                             marker=dict(size=8), hovertemplate="BA<br>%{x:g} mm: %{y:g}%<extra></extra>"))
     if mids:
-        ax.plot(x, [sum(sp[s]) / 2 for s in x], "d--", color="#8B5A2B", lw=2, label="Nilai Tengah")
+        fig.add_trace(go.Scatter(x=x, y=[sum(sp[s]) / 2 for s in x], mode="lines+markers", name="Nilai Tengah",
+                                 line=dict(color=C_MID, width=2.5, dash="dash"),
+                                 marker=dict(size=9, symbol="diamond"),
+                                 hovertemplate="Nilai tengah<br>%{x:g} mm: %{y:.2f}%<extra></extra>"))
     if xs is not None:
-        ax.plot(xs, ys, "o-", color="#E07B39", lw=2.5, label="Presentase Butir Lolos (%)")
-    ax.set_xscale("log")
-    ax.set_xlim(100, 0.01)
-    ax.set_ylim(0, 120)
-    ax.set_xticks([100, 10, 1, 0.1, 0.01])
-    ax.set_xticklabels(["100", "10", "1", "0,1", "0,01"])
-    ax.grid(True, which="major", alpha=0.4)
-    ax.set_xlabel("Ukuran Lubang Saringan (mm)")
-    ax.set_ylabel("Presentase Lolos Kumulatif (%)")
-    ax.set_title("Hasil Perbandingan Presentase Lolos Kumulatif Terhadap Persen "
-                 f"Berat Butir yang Lolos pada {mix}", fontsize=10, wrap=True)
-    ax.legend(loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.28), frameon=False)
-    fig.tight_layout()
+        fig.add_trace(go.Scatter(x=list(xs), y=[float(v) for v in ys], mode="lines+markers",
+                                 name="Presentase Butir Lolos (%)", line=dict(color=C_SMP, width=3),
+                                 marker=dict(size=8),
+                                 hovertemplate="Sampel<br>%{x:g} mm: %{y:.2f}%<extra></extra>"))
+    axis = dict(showline=True, mirror=True, linecolor="#222", gridcolor="rgba(0,0,0,0.12)", zeroline=False)
+    fig.update_xaxes(type="log", range=[2, -2], tickvals=[100, 10, 1, 0.1, 0.01],
+                     ticktext=["100", "10", "1", "0,1", "0,01"], title="Ukuran Lubang Saringan (mm)",
+                     minor=dict(showgrid=False), **axis)
+    fig.update_yaxes(range=[0, 120], tickvals=list(range(0, 121, 20)),
+                     title="Presentase Lolos Kumulatif (%)", **axis)
+    fig.update_layout(
+        title=dict(text=f"Hasil Perbandingan Presentase Lolos Kumulatif Terhadap Persen<br>"
+                        f"Berat Butir yang Lolos pada {mix}", font=dict(size=14), x=0.5, xanchor="center"),
+        paper_bgcolor=BG_PAPER, plot_bgcolor=BG_PLOT, height=520, margin=dict(l=60, r=20, t=80, b=20),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+        hovermode="closest")
     return fig
 
 
 def plot_marshall(ra, specs, kao=None):
-    fig, axes = plt.subplots(2, 3, figsize=(12, 7))
-    fig.patch.set_facecolor("#FBF5EC")
-    for ax, p in zip(axes.ravel(), ["Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)", "VMA (%)", "VIM (%)", "VFA (%)"]):
-        ax.set_facecolor("#FFFDF9")
+    params = ["Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)", "VMA (%)", "VIM (%)", "VFA (%)"]
+    fig = make_subplots(rows=2, cols=3, subplot_titles=params, vertical_spacing=0.16, horizontal_spacing=0.07)
+    for i, p in enumerate(params):
+        r, c = i // 3 + 1, i % 3 + 1
         d = ra[["Kadar Aspal (%)", p]].dropna()
         if not d.empty:
-            ax.plot(d["Kadar Aspal (%)"], d[p], "o-", color="#E07B39", lw=2, label="Hasil uji")
+            fig.add_trace(go.Scatter(x=d["Kadar Aspal (%)"], y=d[p], mode="lines+markers", name="Hasil uji",
+                                     legendgroup="uji", showlegend=(i == 0),
+                                     line=dict(color=C_SMP, width=2.5), marker=dict(size=8),
+                                     hovertemplate="Kadar aspal %{x:g}%<br>" + p + ": %{y:.2f}<extra></extra>"),
+                          row=r, col=c)
         lo, hi = specs.get(p, (np.nan, np.nan))
         if not pd.isna(lo):
-            ax.axhline(lo, color="#5C3317", ls="--", lw=1.5, label="Syarat min")
+            fig.add_hline(y=lo, line=dict(color=C_BB, dash="dash", width=1.5), row=r, col=c,
+                          annotation_text=f"min {lo:g}", annotation_font_size=10)
         if not pd.isna(hi):
-            ax.axhline(hi, color="#B08968", ls="--", lw=1.5, label="Syarat maks")
+            fig.add_hline(y=hi, line=dict(color=C_BA, dash="dash", width=1.5), row=r, col=c,
+                          annotation_text=f"maks {hi:g}", annotation_font_size=10)
         if kao is not None:
-            ax.axvline(kao, color="#2E7D32", ls=":", lw=1.8, label="KAO")
-        ax.set_title(p, fontsize=10)
-        ax.set_xlabel("Kadar Aspal (%)")
-        ax.grid(True, alpha=0.4)
-        if ax.get_legend_handles_labels()[0]:
-            ax.legend(fontsize=7)
-    fig.tight_layout()
+            fig.add_vline(x=kao, line=dict(color="#2E7D32", dash="dot", width=2), row=r, col=c,
+                          annotation_text="KAO", annotation_font_size=10)
+        fig.update_xaxes(title_text="Kadar Aspal (%)", row=r, col=c)
+    axis = dict(showline=True, mirror=True, linecolor="#999", gridcolor="rgba(0,0,0,0.12)")
+    fig.update_xaxes(**axis)
+    fig.update_yaxes(**axis)
+    fig.update_layout(paper_bgcolor=BG_PAPER, plot_bgcolor=BG_PLOT, height=640,
+                      margin=dict(l=50, r=20, t=50, b=40),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5))
     return fig
 
 
 def show_fig(fig, name):
-    st.pyplot(fig)
+    st.plotly_chart(fig, width="stretch", key=f"pl_{name}",
+                    config={"displaylogo": False, "responsive": True,
+                            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                            "toImageButtonOptions": {"format": "png", "filename": name, "scale": 3}})
+    st.caption("Arahkan kursor ke titik untuk melihat nilai. Klik legenda untuk menyembunyikan garis. "
+               "Klik ikon kamera di pojok grafik untuk mengunduh PNG. Klik dua kali untuk reset zoom.")
+
+
+# ------------------------------------------------ ekspor Excel (rumus hidup + grafik)
+_HDR_FILL = PatternFill("solid", fgColor="6F4E37")
+_HDR_FONT = Font(name="Arial", bold=True, color="FFFFFF")
+_IN_FILL = PatternFill("solid", fgColor="FFF2CC")
+_IN_FONT = Font(name="Arial", color="0000FF")
+_Q = {"G": "'Gradasi Rencana'", "A": "'Analisis Saringan'", "K": "'Kadar Aspal'", "B": "'Berat per Saringan'",
+      "V": "'Variasi Kadar Aspal'", "T": "'Tabel Korelasi'", "P": "'Per Benda Uji'", "R": "'Rata-rata'",
+      "C": "'Pengecekan Syarat'", "I": "Input"}
+
+
+def _hdr(ws, row, ncol, c0=1):
+    for c in range(c0, c0 + ncol):
+        cell = ws.cell(row, c)
+        cell.fill, cell.font = _HDR_FILL, _HDR_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def _inp(cell):
+    cell.fill, cell.font = _IN_FILL, _IN_FONT
+
+
+def _widths(ws, widths):
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[CL(i)].width = w
+
+
+def _fmt(ws, rng, f):
+    for row in ws[rng]:
+        for c in row:
+            c.number_format = f
+
+
+def _num(v):
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return float(v)
+
+
+def _legend(ws, cell, text="Sel berwarna kuning dengan huruf biru = isian yang boleh diubah. Sel lain berisi rumus."):
+    ws[cell] = text
+    ws[cell].font = Font(name="Arial", italic=True, color="7F7F7F", size=9)
+
+
+def _ser(xref, yref, title, color, dash=None, marker="circle", width=28575):
+    s = Series(yref, xref, title=title)
+    s.smooth = False
+    s.graphicalProperties.line.solidFill = color
+    s.graphicalProperties.line.width = width
+    if dash:
+        s.graphicalProperties.line.dashStyle = dash
+    if marker == "none":
+        s.marker = Marker(symbol="none")
+    else:
+        s.marker = Marker(symbol=marker, size=7)
+        s.marker.graphicalProperties = GraphicalProperties(solidFill=color)
+        s.marker.graphicalProperties.line.solidFill = color
+    return s
+
+
+def _scatter(title, xt, yt, w, h):
+    ch = ScatterChart()
+    ch.scatterStyle = "lineMarker"
+    ch.title = title
+    ch.x_axis.title, ch.y_axis.title = xt, yt
+    ch.x_axis.delete = False
+    ch.y_axis.delete = False
+    ch.x_axis.majorGridlines = ChartLines()
+    ch.legend.position = "b"
+    ch.width, ch.height = w, h
+    return ch
+
+
+def _grad_chart(mix, wsg, n, ws_s=None, mid=False):
+    """Grafik gradasi: BB, BA (dan nilai tengah / sampel) pada sumbu x logaritmik terbalik."""
+    ch = _scatter(f"Hasil Perbandingan Presentase Lolos Kumulatif Terhadap Persen Berat Butir yang Lolos pada {mix}",
+                  "Ukuran Lubang Saringan (mm)", "Presentase Lolos Kumulatif (%)", 24, 13)
+    ch.x_axis.scaling.logBase = 10
+    ch.x_axis.scaling.min, ch.x_axis.scaling.max = 0.01, 100
+    ch.x_axis.scaling.orientation = "maxMin"
+    ch.y_axis.scaling.min, ch.y_axis.scaling.max, ch.y_axis.majorUnit = 0, 120, 20
+    ch.y_axis.crosses = "max"  # sumbu y tetap di kiri walau sumbu x dibalik
+    xr = Reference(wsg, min_col=7, min_row=2, max_row=n + 1)
+    ch.series.append(_ser(xr, Reference(wsg, min_col=8, min_row=2, max_row=n + 1), "BB", "5C3317"))
+    ch.series.append(_ser(xr, Reference(wsg, min_col=9, min_row=2, max_row=n + 1), "BA", "B08968"))
+    if mid:
+        ch.series.append(_ser(xr, Reference(wsg, min_col=10, min_row=2, max_row=n + 1), "Nilai Tengah", "8B5A2B",
+                              dash="dash", marker="diamond"))
+    if ws_s is not None:
+        ch.series.append(_ser(Reference(ws_s, min_col=1, min_row=2, max_row=len(LAB) + 1),
+                              Reference(ws_s, min_col=5, min_row=2, max_row=len(LAB) + 1),
+                              "Presentase Butir Lolos (%)", "E07B39", width=34925))
+    return ch
+
+
+def xlsx_gradasi(mix, W, K, kadar, Pbr, m, kadar_list, labels):
+    """Workbook Tab 1-3: semua angka turunan berupa rumus yang saling terhubung + grafik Excel."""
+    sp = SPEC[mix]
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "Analisis Saringan"
+    wsc = wb.create_sheet("Pengecekan Batas")
+    wsg = wb.create_sheet("Gradasi Rencana")
+    wsk = wb.create_sheet("Kadar Aspal")
+    wsb = wb.create_sheet("Berat per Saringan")
+    wsr = wb.create_sheet("Koreksi")
+    wsv = wb.create_sheet("Variasi Kadar Aspal")
+    wsw = wb.create_sheet("Variasi Berat Saringan")
+    nL = len(LAB)
+    rpan, rjum = nL + 2, nL + 3
+
+    # ---- Analisis Saringan (input: massa tertahan)
+    ws1.append(["Saringan (mm)", "Massa Tertahan (gr)", "Jumlah Tertahan (gr)", "% Kumulatif Tertahan", "% Lewat"])
+    _hdr(ws1, 1, 5)
+    for i, sz in enumerate(LAB + ["Pan"]):
+        r = i + 2
+        ws1.cell(r, 1, sz)
+        mv = float(m[i])
+        _inp(ws1.cell(r, 2, mv if mv > 0 else None))
+        ws1.cell(r, 3, f"=SUM($B$2:B{r})")
+        ws1.cell(r, 4, f'=IF($B${rjum}=0,"",C{r}/$B${rjum}*100)')
+        ws1.cell(r, 5, f'=IF($B${rjum}=0,"",100-D{r})')
+    ws1.cell(rjum, 1, "Jumlah")
+    ws1.cell(rjum, 2, f"=SUM(B2:B{rpan})")
+    ws1.cell(rjum, 3, f"=SUM(C2:C{rpan})")
+    ws1.cell(rjum, 4, f'=IF($B${rjum}=0,"",SUM(D2:D{rpan - 1}))')
+    for c in range(1, 6):
+        ws1.cell(rjum, c).font = Font(name="Arial", bold=True)
+    ws1["G1"], ws1["H1"] = "MHB", f'=IF($B${rjum}=0,"",D{rjum}/100)'
+    ws1["G2"] = "Keterangan"
+    ws1["H2"] = ('=IF(H1="","",IF(AND(H1>=1.5,H1<=3.8),"Memenuhi syarat pasir (1,5 - 3,8)",'
+                 'IF(AND(H1>=5,H1<=8),"Memenuhi syarat kerikil (5,0 - 8,0)","Di luar syarat pasir dan kerikil")))')
+    ws1["G1"].font = ws1["G2"].font = Font(name="Arial", bold=True)
+    _fmt(ws1, f"B2:B{rjum}", "0.0")
+    _fmt(ws1, f"C2:E{rjum}", "0.00")
+    ws1["H1"].number_format = "0.00"
+    _widths(ws1, [15, 20, 21, 22, 12, 3, 12, 34])
+    _legend(ws1, f"A{rjum + 2}")
+
+    # ---- Gradasi Rencana
+    wsg.append(["Saringan (mm)", "BB", "BA", "% Lolos (Nilai Tengah)", "% Tertahan"])
+    _hdr(wsg, 1, 5)
+    for i, s in enumerate(S):
+        r = i + 2
+        wsg.cell(r, 1, s)
+        if s in sp:
+            wsg.cell(r, 2, sp[s][0])
+            wsg.cell(r, 3, sp[s][1])
+            wsg.cell(r, 4, f"=AVERAGE(B{r},C{r})")
+        else:  # tanpa batas: mengikuti nilai tengah sebelumnya (awal = 100)
+            wsg.cell(r, 4, f"=D{r - 1}" if i else 100)
+        wsg.cell(r, 5, f"=100-D{r}" if i == 0 else f"=D{r - 1}-D{r}")
+    rg_pan, rg_jum = len(S) + 2, len(S) + 3
+    wsg.cell(rg_pan, 1, "Pan")
+    wsg.cell(rg_pan, 4, 0)
+    wsg.cell(rg_pan, 5, f"=D{rg_pan - 1}")
+    wsg.cell(rg_jum, 1, "Jumlah")
+    wsg.cell(rg_jum, 5, f"=SUM(E2:E{rg_pan})")
+    for c in range(1, 6):
+        wsg.cell(rg_jum, c).font = Font(name="Arial", bold=True)
+    spec_s = [s for s in S if s in sp]
+    for c, h in enumerate(["Saringan (mm)", "BB", "BA", "Nilai Tengah"], 7):
+        wsg.cell(1, c, h)
+    _hdr(wsg, 1, 4, 7)
+    wsg["G1"].value = "Saringan (mm)"
+    for j, s in enumerate(spec_s):
+        r, rs = j + 2, S.index(s) + 2
+        for c, col in zip(range(7, 11), "ABCD"):
+            wsg.cell(r, c, f"={col}{rs}")
+    wsg.cell(len(spec_s) + 3, 7, "Blok G:J = data grafik (hanya saringan yang diatur spesifikasi).").font = \
+        Font(name="Arial", italic=True, color="7F7F7F", size=9)
+    _fmt(wsg, f"B2:E{rg_jum}", "0.00")
+    _fmt(wsg, f"H2:J{len(spec_s) + 1}", "0.00")
+    _widths(wsg, [15, 9, 9, 22, 13, 3, 15, 9, 9, 13])
+    wsg.add_chart(_grad_chart(mix, wsg, len(spec_s), mid=True), "L2")
+    ws1.add_chart(_grad_chart(mix, wsg, len(spec_s), ws_s=ws1), "J4")
+
+    # ---- Pengecekan Batas
+    wsc.append(["Saringan (mm)", "BB", "BA", "% Lolos Sampel", "Selisih ke batas (%)", "Status"])
+    _hdr(wsc, 1, 6)
+    r = 2
+    for i, sz in enumerate(LAB):
+        if sz not in sp:
+            continue
+        rg = S.index(sz) + 2
+        wsc.cell(r, 1, sz)
+        wsc.cell(r, 2, f"={_Q['G']}!B{rg}")
+        wsc.cell(r, 3, f"={_Q['G']}!C{rg}")
+        wsc.cell(r, 4, f"={_Q['A']}!E{i + 2}")
+        ok = f"AND(D{r}>=B{r}-0.005,D{r}<=C{r}+0.005)"
+        wsc.cell(r, 5, f'=IF(D{r}="","",IF({ok},0,IF(D{r}>C{r},D{r}-C{r},D{r}-B{r})))')
+        wsc.cell(r, 6, f'=IF(D{r}="","",IF({ok},"Masuk batas","Di luar batas"))')
+        r += 1
+    _fmt(wsc, f"D2:E{max(r, 3)}", "0.00")
+    _widths(wsc, [15, 9, 9, 16, 20, 16])
+
+    # ---- Kadar Aspal
+    r236, r075 = S.index(2.36) + 2, S.index(0.075) + 2
+    wsk.append(["Parameter", "Nilai", "Keterangan"])
+    _hdr(wsk, 1, 3)
+    rows_k = [
+        ("Jenis campuran", mix, "Pilihan di aplikasi"),
+        ("Berat campuran (gr)", float(W), "Isian"),
+        ("Konstanta K", float(K), "Isian"),
+        ("AK (tertahan 2,36 mm) (%)", f"=100-{_Q['G']}!D{r236}", "100 - % lolos 2,36"),
+        ("AH (lolos 2,36 - lolos 0,075) (%)", f"={_Q['G']}!D{r236}-{_Q['G']}!D{r075}", ""),
+        ("F (lolos 0,075) (%)", f"={_Q['G']}!D{r075}", ""),
+        ("Pb estimasi (%)", "=0.035*B5+0.045*B6+0.18*B7+B4", "Pb = 0,035 AK + 0,045 AH + 0,18 F + K"),
+        ("Pb dibulatkan 0,5% (%)", "=INT(B8*2+0.5)/2", "Pembulatan ke 0,5% terdekat"),
+        ("Kadar aspal yang dipakai (%)", "=B9" if abs(kadar - Pbr) < 1e-9 else float(kadar),
+         "Isian. Boleh diganti angka lain"),
+        ("Berat aspal (gr)", "=B10/100*B3", ""),
+        ("Berat agregat (gr)", "=B3-B11", ""),
+    ]
+    for i, (a, b, c) in enumerate(rows_k, 2):
+        wsk.cell(i, 1, a), wsk.cell(i, 2, b), wsk.cell(i, 3, c)
+    for ref in ("B3", "B4", "B10"):
+        _inp(wsk[ref])
+    _fmt(wsk, "B5:B12", "0.000")
+    _widths(wsk, [36, 16, 40])
+    _legend(wsk, "A14")
+
+    # ---- Berat per Saringan
+    wsb.append(["Saringan (mm)", "% Tertahan", "Berat Tertahan (gr)"])
+    _hdr(wsb, 1, 3)
+    for i, s in enumerate(S + ["Pan"]):
+        r = i + 2
+        wsb.cell(r, 1, s)
+        wsb.cell(r, 2, f"={_Q['G']}!E{r}")
+        wsb.cell(r, 3, f"=B{r}/100*{_Q['K']}!$B$12")
+    rj = len(S) + 3
+    wsb.cell(rj, 1, "Jumlah")
+    wsb.cell(rj, 2, f"=SUM(B2:B{rj - 1})")
+    wsb.cell(rj, 3, f"=SUM(C2:C{rj - 1})")
+    for c in range(1, 4):
+        wsb.cell(rj, c).font = Font(name="Arial", bold=True)
+    _fmt(wsb, f"B2:C{rj}", "0.00")
+    _widths(wsb, [15, 14, 20])
+
+    # ---- Koreksi
+    wsr.append(["Komponen", "Sebelum Koreksi (%)", "Setelah Koreksi (%)", "Berat (gr)"])
+    _hdr(wsr, 1, 4)
+    for i, (nm, src) in enumerate([("Agregat kasar (AK)", "B5"), ("Agregat halus (AH)", "B6"), ("Filler (F)", "B7")], 2):
+        wsr.cell(i, 1, nm)
+        wsr.cell(i, 2, f"={_Q['K']}!{src}")
+        wsr.cell(i, 3, f"=B{i}*(1-{_Q['K']}!$B$10/100)")
+        wsr.cell(i, 4, f"=C{i}/100*{_Q['K']}!$B$3")
+    wsr.cell(5, 1, "Aspal")
+    wsr.cell(5, 3, f"={_Q['K']}!B10")
+    wsr.cell(5, 4, f"=C5/100*{_Q['K']}!$B$3")
+    wsr.cell(6, 1, "Total")
+    wsr.cell(6, 2, "=SUM(B2:B4)")
+    wsr.cell(6, 3, "=SUM(C2:C5)")
+    wsr.cell(6, 4, "=SUM(D2:D5)")
+    for c in range(1, 5):
+        wsr.cell(6, c).font = Font(name="Arial", bold=True)
+    _fmt(wsr, "B2:D6", "0.00")
+    _widths(wsr, [22, 20, 20, 14])
+
+    # ---- Variasi kadar aspal
+    wsv.append(["Variasi", "Kadar Aspal (%)", "Berat Aspal (gr)", "Berat Agregat (gr)"])
+    _hdr(wsv, 1, 4)
+    for i, (lb, k) in enumerate(zip(labels, kadar_list), 2):
+        off = round(k - kadar, 2)
+        wsv.cell(i, 1, lb)
+        wsv.cell(i, 2, f"=ROUND({_Q['K']}!$B$10+({off}),2)")
+        wsv.cell(i, 3, f"=B{i}/100*{_Q['K']}!$B$3")
+        wsv.cell(i, 4, f"={_Q['K']}!$B$3-C{i}")
+    _fmt(wsv, f"B2:D{len(kadar_list) + 1}", "0.00")
+    _widths(wsv, [14, 16, 18, 20])
+
+    # ---- Variasi berat saringan
+    wsw.cell(1, 1, "Saringan (mm)")
+    for j in range(len(kadar_list)):
+        wsw.cell(1, 2 + j, f'={_Q["V"]}!B{2 + j}&"% (gr)"')
+    _hdr(wsw, 1, 1 + len(kadar_list))
+    for i, s in enumerate(S + ["Pan"]):
+        r = i + 2
+        wsw.cell(r, 1, s)
+        for j in range(len(kadar_list)):
+            wsw.cell(r, 2 + j, f"={_Q['B']}!$B{r}/100*({_Q['K']}!$B$3-{_Q['V']}!$B${2 + j}/100*{_Q['K']}!$B$3)")
+    rj = len(S) + 3
+    wsw.cell(rj, 1, "Jumlah").font = Font(name="Arial", bold=True)
+    for j in range(len(kadar_list)):
+        c = wsw.cell(rj, 2 + j, f"=SUM({CL(2 + j)}2:{CL(2 + j)}{rj - 1})")
+        c.font = Font(name="Arial", bold=True)
+    _fmt(wsw, f"B2:{CL(1 + len(kadar_list))}{rj}", "0.00")
+    _widths(wsw, [15] + [14] * len(kadar_list))
+
+    wb.calculation.fullCalcOnLoad = True
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
-    st.download_button("Unduh grafik (PNG)", buf.getvalue(), f"{name}.png", "image/png", key=name)
-    plt.close(fig)
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def xlsx_marshall(mix, specs, bj, kal_in, unit, props, rows_in, kadar_vals):
+    """Workbook Tab 4: VMA/VIM/VFA/stabilitas/MQ, rata-rata, cek syarat, KAO berupa rumus + 6 grafik Excel."""
+    wb = Workbook()
+    wsi = wb.active
+    wsi.title = "Input"
+    wst = wb.create_sheet("Tabel Korelasi")
+    wsp = wb.create_sheet("Per Benda Uji")
+    wsr = wb.create_sheet("Rata-rata")
+    wsc = wb.create_sheet("Pengecekan Syarat")
+    wsx = wb.create_sheet("Grafik Marshall")
+    wsd = wb.create_sheet("Data Grafik")
+
+    # ---- Input
+    wsi.append(["Parameter", "Nilai", "Keterangan"])
+    _hdr(wsi, 1, 3)
+    pCA, pFA, pFF = props
+    rows_i = [
+        ("BJ bulk agregat kasar", _num(bj["kasar_bulk"]), "Isian"),
+        ("BJ bulk agregat halus", _num(bj["halus_bulk"]), "Isian"),
+        ("BJ bulk filler", _num(bj["filler_bulk"]), "Isian"),
+        ("BJ semu agregat kasar", _num(bj["kasar_semu"]), "Isian"),
+        ("BJ semu agregat halus", _num(bj["halus_semu"]), "Isian"),
+        ("BJ semu filler", _num(bj["filler_semu"]), "Isian"),
+        ("BJ aspal", _num(bj["aspal"]), "Isian"),
+        ("Faktor kalibrasi alat (per skala)", _num(kal_in), "Isian"),
+        ("Satuan faktor kalibrasi", unit, "Isian: kg atau lbs"),
+        ("Faktor kalibrasi (kg per skala)", '=IF(B9="","",IF(B10="lbs",B9*0.45359237,B9))', "1 lbs = 0,45359237 kg"),
+        ("Proporsi agregat kasar (%)", float(pCA), f"Dari gradasi rencana {mix} (tertahan 4,75 mm)"),
+        ("Proporsi agregat halus (%)", float(pFA), "Dari gradasi rencana"),
+        ("Proporsi filler (%)", float(pFF), "Dari gradasi rencana"),
+        ("Jenis campuran", mix, ""),
+        ("BJ bulk agregat gabungan (Gsb)", '=IF(COUNT(B2:B8)<7,"",100/(B12/B2+B13/B3+B14/B4))', ""),
+        ("BJ semu agregat gabungan (Gsa)", '=IF(COUNT(B2:B8)<7,"",100/(B12/B5+B13/B6+B14/B7))', ""),
+        ("BJ efektif agregat gabungan (Gse)",
+         '=IF(COUNT(B2:B8)<7,"",100/(B12/((B2+B5)/2)+B13/((B3+B6)/2)+B14/((B4+B7)/2)))',
+         "Rata-rata BJ bulk dan semu tiap fraksi"),
+    ]
+    for i, (a, b, c) in enumerate(rows_i, 2):
+        wsi.cell(i, 1, a), wsi.cell(i, 2, b), wsi.cell(i, 3, c)
+    for r in list(range(2, 11)) + [12, 13, 14]:
+        _inp(wsi.cell(r, 2))
+    dv = DataValidation(type="list", formula1='"kg,lbs"', allow_blank=False)
+    wsi.add_data_validation(dv)
+    dv.add("B10")
+    _fmt(wsi, "B2:B9", "0.0000")
+    _fmt(wsi, "B11:B18", "0.0000")
+    _widths(wsi, [38, 16, 48])
+    _legend(wsi, "A20")
+
+    # ---- Tabel korelasi
+    wst.append(["Isi min (cm3)", "Isi maks (cm3)", "Titik tengah", "Angka korelasi"])
+    _hdr(wst, 1, 4)
+    for i, (a, b, c) in enumerate(KORELASI, 2):
+        wst.cell(i, 1, a), wst.cell(i, 2, b), wst.cell(i, 3, f"=(A{i}+B{i})/2"), wst.cell(i, 4, c)
+    k1, k2 = 2, len(KORELASI) + 1
+    wst.cell(k2 + 2, 1, "Sumber: SNI 06-2489-1991. Angka korelasi untuk volume di antara titik tengah diinterpolasi linear.").font = \
+        Font(name="Arial", italic=True, color="7F7F7F", size=9)
+    _widths(wst, [14, 14, 14, 16])
+
+    # ---- Per benda uji
+    cols_m = list(rows_in.columns)
+    data = [[_num(rw[c]) for c in cols_m] for _, rw in rows_in.iterrows()]
+    data = [d for d in data if any(v is not None for v in d)]
+    last = len(data) + 5 + 1  # + 5 baris cadangan
+    wsp.append(["No"] + cols_m + ["Volume (cm3)", "BJ Bulk Campuran", "BJ Teoritis Maks", "VMA (%)", "VIM (%)",
+                                  "VFA (%)", "Angka Korelasi", "Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)"])
+    _hdr(wsp, 1, 17)
+    wsp.row_dimensions[1].height = 45
+    tk_x, tk_y = f"{_Q['T']}!$C${k1}:$C${k2}", f"{_Q['T']}!$D${k1}:$D${k2}"
+    for r in range(2, last + 1):
+        wsp.cell(r, 1, r - 1)
+        vals = data[r - 2] if r - 2 < len(data) else [None] * 7
+        for c, v in enumerate(vals, 2):
+            _inp(wsp.cell(r, c, v))
+        mt = f"MATCH(I{r},{tk_x},1)"
+        interp = (f"ROUND(INDEX({tk_y},{mt})+(I{r}-INDEX({tk_x},{mt}))*(INDEX({tk_y},{mt}+1)-INDEX({tk_y},{mt}))"
+                  f"/(INDEX({tk_x},{mt}+1)-INDEX({tk_x},{mt})),2)")
+        f = {
+            "I": f'=IF(COUNT(B{r}:E{r})<4,"",IF(OR(D{r}-E{r}<=0,B{r}<=0,B{r}>=100),"",D{r}-E{r}))',
+            "J": f'=IF(I{r}="","",C{r}/I{r})',
+            "K": f'=IF(OR(I{r}="",Input!$B$18="",Input!$B$8=""),"",100/((100-B{r})/Input!$B$18+B{r}/Input!$B$8))',
+            "L": f'=IF(OR(K{r}="",Input!$B$16=""),"",100-J{r}*(100-B{r})/Input!$B$16)',
+            "M": f'=IF(K{r}="","",100*(K{r}-J{r})/K{r})',
+            "N": f'=IF(OR(L{r}="",M{r}=""),"",100*(L{r}-M{r})/L{r})',
+            "O": f'=IF(I{r}="","",IF(ISNUMBER(H{r}),H{r},IF(I{r}<={tk_x.split(":")[0]},{tk_y.split(":")[0]},'
+                 f'IF(I{r}>=INDEX({tk_x},{k2 - k1 + 1}),INDEX({tk_y},{k2 - k1 + 1}),{interp}))))',
+            "P": f'=IF(OR(I{r}="",F{r}="",Input!$B$11=""),"",F{r}*Input!$B$11*O{r})',
+            "Q": f'=IF(I{r}="","",IF(ISNUMBER(G{r}),IF(G{r}>0,G{r},""),""))',
+            "R": f'=IF(OR(P{r}="",Q{r}=""),"",P{r}/Q{r})',
+        }
+        for col, fx in f.items():
+            wsp[f"{col}{r}"] = fx
+    _fmt(wsp, f"I2:K{last}", "0.000")
+    _fmt(wsp, f"L2:N{last}", "0.00")
+    _fmt(wsp, f"O2:O{last}", "0.00")
+    _fmt(wsp, f"P2:R{last}", "0.00")
+    _widths(wsp, [5] + [13] * 7 + [12, 13, 13, 10, 10, 10, 12, 14, 10, 12])
+    _legend(wsp, f"A{last + 2}", "Isi / ubah kolom kuning (B-H). Kolom I-R berisi rumus. Baris cadangan sudah berisi rumus: "
+                                  "untuk menambah baris, salin rumus kolom I-R ke bawah dan perluas rentang di sheet Rata-rata.")
+
+    # ---- Rata-rata per kadar aspal
+    n = len(kadar_vals)
+    prng = lambda col: f"{_Q['P']}!${col}$2:${col}${last}"
+    src = {"VIM (%)": "M", "VMA (%)": "L", "VFA (%)": "N", "Stabilitas (kg)": "P", "Flow (mm)": "Q", "MQ (kg/mm)": "R"}
+    wsr.append(["Kadar Aspal (%)", "Jumlah Benda Uji"] + MPARAMS)
+    _hdr(wsr, 1, 2 + len(MPARAMS))
+    for i, kv in enumerate(kadar_vals, 2):
+        wsr.cell(i, 1, float(kv))
+        wsr.cell(i, 2, f'=COUNTIFS({prng("B")},A{i},{prng("I")},">0")')
+        for j, p in enumerate(MPARAMS):
+            wsr.cell(i, 3 + j, f'=IFERROR(AVERAGEIFS({prng(src[p])},{prng("B")},$A{i}),"")')
+    _fmt(wsr, f"C2:H{n + 1}", "0.000")
+    _widths(wsr, [16, 16] + [13] * 6)
+
+    # ---- Pengecekan syarat + KAO
+    wsc.append(["Parameter", "Min", "Maks"])
+    _hdr(wsc, 1, 3)
+    for j, p in enumerate(MPARAMS, 2):
+        wsc.cell(j, 1, p)
+        lo, hi = specs.get(p, (None, None))
+        _inp(wsc.cell(j, 2, _num(lo)))
+        _inp(wsc.cell(j, 3, _num(hi)))
+    e = 12 + n
+    wsc["A9"] = "KAO (%)"
+    wsc["A9"].font = Font(name="Arial", bold=True)
+    wsc["B9"] = (f'=IF(COUNT(I13:I{e})>0,INDEX(A13:A{e},MATCH(MAX(I13:I{e}),I13:I{e},0)),'
+                 f'IF(COUNT(J13:J{e})>0,MEDIAN(J13:J{e}),"Belum ada yang memenuhi"))')
+    wsc["C9"] = "Kadar yang memenuhi semua syarat dengan stabilitas tertinggi"
+    wsc["B9"].font = Font(name="Arial", bold=True, color="2E7D32")
+    wsc.append([])
+    hdr_row = 12
+    for c, h in enumerate(["Kadar Aspal (%)"] + MPARAMS + ["Semua memenuhi", "Stabilitas jika memenuhi",
+                                                          "Kadar jika memenuhi"], 1):
+        wsc.cell(hdr_row, c, h)
+    _hdr(wsc, hdr_row, 10)
+    wsc.row_dimensions[hdr_row].height = 32
+    for r in range(13, e + 1):
+        rr = r - 11
+        wsc.cell(r, 1, f"={_Q['R']}!A{rr}")
+        for j in range(6):
+            v, lo, hi = f"{_Q['R']}!{CL(3 + j)}{rr}", f"$B${2 + j}", f"$C${2 + j}"
+            wsc.cell(r, 2 + j, f'=IF(AND({lo}="",{hi}=""),"-",IF({v}="","Tidak",IF(AND(OR({lo}="",{v}>={lo}-1E-9),'
+                               f'OR({hi}="",{v}<={hi}+1E-9)),"Memenuhi","Tidak")))')
+        wsc.cell(r, 8, f'=IF(AND(COUNTIF(B{r}:G{r},"Memenuhi")>0,COUNTIF(B{r}:G{r},"Memenuhi")+COUNTIF(B{r}:G{r},"-")=6),"Ya","Tidak")')
+        wsc.cell(r, 9, f'=IF(H{r}="Ya",{_Q["R"]}!F{rr},"")')
+        wsc.cell(r, 10, f'=IF(H{r}="Ya",A{r},"")')
+    _fmt(wsc, f"I13:I{e}", "0.00")
+    _widths(wsc, [18, 12, 12, 12, 17, 12, 12, 16, 20, 18])
+    _legend(wsc, f"A{e + 2}", "Syarat min/maks (kuning) boleh diubah. KAO dan status ikut berubah otomatis.")
+
+    # ---- Data grafik (memakai NA() agar titik kosong tidak digambar)
+    wsd.cell(1, 1, "Kadar Aspal (%)")
+    rA, rB = n + 3, n + 4
+    wsd.cell(rA - 1, 1, "KAO (garis vertikal)")
+    wsd.cell(rA, 1, f'=IF(ISNUMBER({_Q["C"]}!$B$9),{_Q["C"]}!$B$9,NA())')
+    wsd.cell(rB, 1, f"=A{rA}")
+    for i in range(2, n + 2):
+        wsd.cell(i, 1, f"={_Q['R']}!A{i}")
+    for j, p in enumerate(MPARAMS):
+        c0 = 2 + 4 * j
+        for k, h in enumerate([f"{p} hasil", f"{p} min", f"{p} maks", f"{p} KAO"]):
+            wsd.cell(1, c0 + k, h)
+        rc = CL(3 + j)
+        for i in range(2, n + 2):
+            wsd.cell(i, c0, f'=IF({_Q["R"]}!{rc}{i}="",NA(),{_Q["R"]}!{rc}{i})')
+            wsd.cell(i, c0 + 1, f'=IF({_Q["C"]}!$B${2 + j}="",NA(),{_Q["C"]}!$B${2 + j})')
+            wsd.cell(i, c0 + 2, f'=IF({_Q["C"]}!$C${2 + j}="",NA(),{_Q["C"]}!$C${2 + j})')
+        rngc = f"{_Q['R']}!{rc}2:{rc}{n + 1}"
+        wsd.cell(rA, c0 + 3, f'=MIN(MIN({rngc}),IF({_Q["C"]}!$B${2 + j}="",MIN({rngc}),{_Q["C"]}!$B${2 + j}))')
+        wsd.cell(rB, c0 + 3, f'=MAX(MAX({rngc}),IF({_Q["C"]}!$C${2 + j}="",MAX({rngc}),{_Q["C"]}!$C${2 + j}))')
+    wsd.cell(rB + 2, 1, "Sheet pendukung grafik. Sel berisi NA() itu disengaja: Excel tidak menggambar titik tersebut "
+                        "(syarat yang tidak diisi atau data yang kosong).").font = Font(name="Arial", italic=True, color="7F7F7F", size=9)
+    _hdr(wsd, 1, 1 + 4 * len(MPARAMS))
+    wsd.row_dimensions[1].height = 32
+    _widths(wsd, [16] + [14] * 24)
+
+    # ---- Grafik Marshall (2 x 3)
+    order = ["Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)", "VMA (%)", "VIM (%)", "VFA (%)"]
+    anchors = ["A1", "J1", "S1", "A18", "J18", "S18"]
+    xr = Reference(wsd, min_col=1, min_row=2, max_row=n + 1)
+    xk = Reference(wsd, min_col=1, min_row=rA, max_row=rB)
+    for p, anc in zip(order, anchors):
+        c0 = 2 + 4 * MPARAMS.index(p)
+        ch = _scatter(p, "Kadar Aspal (%)", p, 14, 8.5)
+        ch.series.append(_ser(xr, Reference(wsd, min_col=c0, min_row=2, max_row=n + 1), "Hasil uji", "E07B39"))
+        ch.series.append(_ser(xr, Reference(wsd, min_col=c0 + 1, min_row=2, max_row=n + 1), "Syarat min", "5C3317",
+                              dash="dash", marker="none", width=19050))
+        ch.series.append(_ser(xr, Reference(wsd, min_col=c0 + 2, min_row=2, max_row=n + 1), "Syarat maks", "B08968",
+                              dash="dash", marker="none", width=19050))
+        ch.series.append(_ser(xk, Reference(wsd, min_col=c0 + 3, min_row=rA, max_row=rB), "KAO", "2E7D32",
+                              dash="sysDot", marker="none", width=25400))
+        wsx.add_chart(ch, anc)
+
+    wb.calculation.fullCalcOnLoad = True
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 st.set_page_config(page_title="GradAspal", page_icon="🛣️", layout="wide")
@@ -419,22 +946,10 @@ with tab3:
     st.markdown("**Berat agregat tertahan tiap saringan untuk tiap kadar aspal**")
     st.dataframe(dv2.round(2), hide_index=True, width="stretch")
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        if df1 is not None:
-            df1.round(2).to_excel(xw, sheet_name="Analisis Saringan", index=False)
-        df2.round(2).to_excel(xw, sheet_name="Gradasi Rencana", index=False)
-        pd.DataFrame({"Parameter": ["Jenis campuran", "K", "AK", "AH", "F", "Pb estimasi", "Kadar dipakai",
-                                    "Berat campuran", "Berat aspal", "Berat agregat"],
-                      "Nilai": [mix, K, round(AK, 2), round(AH, 2), round(F, 2), round(Pb, 3), kadar,
-                                W, round(Wa, 2), round(Wg, 2)]}
-                     ).to_excel(xw, sheet_name="Kadar Aspal", index=False)
-        df3.round(2).to_excel(xw, sheet_name="Berat per Saringan", index=False)
-        df4.round(2).to_excel(xw, sheet_name="Koreksi", index=False)
-        dv1.round(2).to_excel(xw, sheet_name="Variasi Kadar Aspal", index=False)
-        dv2.round(2).to_excel(xw, sheet_name="Variasi Berat Saringan", index=False)
-    st.download_button("Unduh hasil (Excel)", buf.getvalue(), "hasil_gradaspal.xlsx",
+    xbuf = xlsx_gradasi(mix, W, K, kadar, Pbr, m, kadar_list, labels)
+    st.download_button("Unduh hasil (Excel)", xbuf, "hasil_gradaspal.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.caption("File Excel berisi rumus yang saling terhubung dan grafik. Ubah sel kuning (massa tertahan, berat campuran, K, kadar aspal) dan semua hasil ikut dihitung ulang.")
 
 # ------------------------------------------------------------------ tab 4: Marshall
 with tab4:
@@ -614,13 +1129,11 @@ with tab4:
                        "kadar yang memenuhi semua syarat dengan stabilitas tertinggi.")
         show_fig(plot_marshall(ra, specs, kao), "grafik_marshall")
 
-        mbuf = io.BytesIO()
-        with pd.ExcelWriter(mbuf, engine="openpyxl") as xw:
-            rm[show_cols].round(4).to_excel(xw, sheet_name="Per Benda Uji", index=False)
-            ra.round(4).to_excel(xw, sheet_name="Rata-rata", index=False)
-            pd.DataFrame(stat_rows, columns=["Kadar Aspal (%)"] + MPARAMS + ["Semua memenuhi"]).to_excel(
-                xw, sheet_name="Pengecekan Syarat", index=False)
-        st.download_button("Unduh hasil Marshall (Excel)", mbuf.getvalue(), "hasil_marshall.xlsx",
+        mbuf = xlsx_marshall(mix, specs, {"kasar_bulk": bulk_k, "halus_bulk": bulk_h, "filler_bulk": bulk_f,
+                                          "kasar_semu": semu_k, "halus_semu": semu_h, "filler_semu": semu_f,
+                                          "aspal": bj_asp}, kal_in, unit, (pCA, pFA, pFF), ed_m,
+                             list(ra["Kadar Aspal (%)"]))
+        st.download_button("Unduh hasil Marshall (Excel)", mbuf, "hasil_marshall.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_marshall")
 
 mparams = {"kasar_bulk": bulk_k, "halus_bulk": bulk_h, "filler_bulk": bulk_f, "kasar_semu": semu_k,
