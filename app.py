@@ -357,8 +357,7 @@ def xlsx_gradasi(mix, W, K, kadar, Pbr, m, kadar_list, labels):
         ws1.cell(rjum, c).font = Font(name="Arial", bold=True)
     ws1["G1"], ws1["H1"] = "MHB", f'=IF($B${rjum}=0,"",D{rjum}/100)'
     ws1["G2"] = "Keterangan"
-    ws1["H2"] = ('=IF(H1="","",IF(AND(H1>=1.5,H1<=3.8),"Memenuhi syarat pasir (1,5 - 3,8)",'
-                 'IF(AND(H1>=5,H1<=8),"Memenuhi syarat kerikil (5,0 - 8,0)","Di luar syarat pasir dan kerikil")))')
+    ws1["H2"] = "MHB campuran gabungan (informasi). Syarat pasir 1,5-3,8 dan kerikil 5,0-8,0 berlaku untuk agregat tunggal."
     ws1["G1"].font = ws1["G2"].font = Font(name="Arial", bold=True)
     _fmt(ws1, f"B2:B{rjum}", "0.0")
     _fmt(ws1, f"C2:E{rjum}", "0.00")
@@ -831,12 +830,8 @@ with tab1:
 
         c1, c2 = st.columns(2)
         c1.metric("MHB", f"{mhb:.2f}")
-        if 1.5 <= mhb <= 3.8:
-            c2.success("MHB memenuhi syarat agregat halus/pasir (1,5 - 3,8)")
-        elif 5.0 <= mhb <= 8.0:
-            c2.success("MHB memenuhi syarat agregat kasar/kerikil (5,0 - 8,0)")
-        else:
-            c2.error("MHB di luar syarat pasir (1,5-3,8) dan kerikil (5,0-8,0)")
+        c2.info("MHB campuran gabungan, ditampilkan sebagai informasi. Syarat MHB pasir (1,5 - 3,8) dan "
+                "kerikil (5,0 - 8,0) berlaku untuk agregat yang diuji sendiri, bukan untuk campuran.")
 
         rows, tips = [], []
         for i, sz in enumerate(LAB):
@@ -1209,9 +1204,10 @@ with tab5:
                      "Lihat bagian **Saran perbaikan gradasi** di bawah tabel pengecekan di Tab 1. Di sana ada penjelasan "
                      "fraksi mana yang perlu ditambah atau dikurangi. Kolom **Selisih ke batas** menunjukkan seberapa jauh "
                      "nilainya dari batas (positif = melebihi BA, negatif = kurang dari BB).")
-        with st.expander("MHB-ku di luar syarat. Salah di mana?"):
-            st.write("Periksa urutan saringan dan angka massa (satuan gram). Syarat MHB: pasir 1,5-3,8 dan kerikil 5,0-8,0. "
-                     "Jika sampelmu campuran, nilainya bisa di antara keduanya, sehingga ditandai di luar syarat.")
+        with st.expander("Kenapa MHB tidak diberi status memenuhi atau tidak?"):
+            st.write("Tab 1 menganalisis campuran agregat gabungan, sehingga MHB hanya ditampilkan sebagai informasi. "
+                     "Syarat MHB pasir 1,5-3,8 dan kerikil 5,0-8,0 berlaku untuk agregat yang diuji sendiri. "
+                     "Kalau hasilmu terasa janggal, periksa urutan saringan dan angka massa (satuan gram).")
         with st.expander("Apakah hasil aplikasi ini kadar aspal optimum?"):
             st.write("Bukan. Aplikasi menghitung kadar aspal estimasi (Pb) dari rumus sebagai titik awal. "
                      "Kadar optimum ditentukan dari uji Marshall pada benda uji dengan lima variasi kadar aspal "
