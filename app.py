@@ -33,7 +33,7 @@ st.markdown("""
         color: white;
     }
     </style>
-""", unsafe_allow_text=unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 st.title("🏗️ GradAspal")
 st.subheader("Aplikasi Analisis & Visualisasi Gradasi Agregat Campuran Aspal")
