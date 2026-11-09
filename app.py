@@ -728,6 +728,132 @@ def xlsx_marshall(mix, specs, bj, kal_in, unit, props, rows_in, kadar_vals):
 
 
 st.set_page_config(page_title="GradAspal", page_icon="🛣️", layout="wide")
+
+import random as _rnd
+
+
+def _hero_html():
+    """Hero dengan ilustrasi 3D lapisan perkerasan (isometrik, melayang)."""
+    cx, W2, H2, gap = 150, 104, 52, 16
+    layers = [("AC-WC", 14, "#3A4048", "#20242A", "#2B3036", "Lapis aus"),
+              ("AC-BC", 16, "#4B535D", "#2D333A", "#393F48", "Lapis antara"),
+              ("AC-Base", 20, "#5E6874", "#38404A", "#47505B", "Pondasi aspal"),
+              ("LPA", 26, "#C2AE82", "#8E7E5C", "#A69468", "Pondasi agregat"),
+              ("Tanah", 34, "#A0704A", "#6F4A2D", "#86593A", "Tanah dasar")]
+    ys, y = [], 24
+    for _, t, *_r in layers:
+        ys.append(y)
+        y += t + gap
+    rnd = _rnd.Random(11)
+    parts = []
+    for i in reversed(range(len(layers))):  # gambar dari bawah ke atas
+        nm, t, top, left, right, lab = layers[i]
+        cy = ys[i]
+        T = f"{cx},{cy} {cx + W2},{cy + H2} {cx},{cy + 2 * H2} {cx - W2},{cy + H2}"
+        L = f"{cx - W2},{cy + H2} {cx},{cy + 2 * H2} {cx},{cy + 2 * H2 + t} {cx - W2},{cy + H2 + t}"
+        R = f"{cx},{cy + 2 * H2} {cx + W2},{cy + H2} {cx + W2},{cy + H2 + t} {cx},{cy + 2 * H2 + t}"
+        g = [f'<g class="slab" style="animation-delay:{i * 0.35:.2f}s">',
+             f'<polygon points="{L}" fill="{left}"/>', f'<polygon points="{R}" fill="{right}"/>',
+             f'<polygon points="{T}" fill="{top}" stroke="rgba(255,255,255,.18)" stroke-width="1"/>']
+        if i <= 2:  # tekstur butir agregat
+            for _ in range(26):
+                px, py = rnd.uniform(-0.85, 0.85), rnd.uniform(-0.85, 0.85)
+                if abs(px) + abs(py) <= 0.88:
+                    g.append(f'<circle cx="{cx + px * W2:.1f}" cy="{cy + H2 + py * H2:.1f}" r="{rnd.uniform(.9, 1.7):.1f}" '
+                             f'fill="rgba(255,255,255,{rnd.uniform(.10, .30):.2f})"/>')
+        if i == 0:  # marka jalan putus-putus
+            g.append(f'<line x1="{cx - W2 / 2}" y1="{cy + H2 / 2}" x2="{cx + W2 / 2}" y2="{cy + 1.5 * H2}" '
+                     f'stroke="#FBBF24" stroke-width="3.2" stroke-dasharray="11 8" stroke-linecap="round"/>')
+        ly = cy + H2 + t / 2
+        g.append(f'<line x1="{cx + W2 + 4}" y1="{ly}" x2="{cx + W2 + 22}" y2="{ly}" stroke="#FDE68A" stroke-width="1.2"/>')
+        g.append(f'<text x="{cx + W2 + 27}" y="{ly + 4}" fill="#E8F0F8" font-size="12" font-weight="700" '
+                 f'font-family="Arial,sans-serif">{nm}</text>')
+        g.append(f'<text x="{cx + W2 + 27}" y="{ly + 17}" fill="#9FB3C8" font-size="9.5" '
+                 f'font-family="Arial,sans-serif">{lab}</text>')
+        g.append('</g>')
+        parts.append("".join(g))
+    base_y = ys[-1] + 2 * H2 + layers[-1][1] + 18
+    svg = (f'<svg viewBox="0 0 420 {base_y + 18}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lapisan perkerasan jalan">'
+           f'<defs><radialGradient id="shd" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#000" stop-opacity=".55"/>'
+           f'<stop offset="100%" stop-color="#000" stop-opacity="0"/></radialGradient></defs>'
+           f'<ellipse cx="{cx}" cy="{base_y}" rx="132" ry="15" fill="url(#shd)"/>' + "".join(parts) + '</svg>')
+    return ('<div class="hero"><div class="hero-txt"><h1>🛣️ GradAspal</h1>'
+            '<p>Perencanaan gradasi agregat, kadar aspal estimasi, dan kadar aspal optimum (uji Marshall) untuk Latasir, Lataston, dan Laston</p>'
+            '<div class="chips"><span>Latasir</span><span>Lataston</span><span>Laston</span><span>Uji Marshall</span><span>Tanpa login</span></div>'
+            '<div class="tagline">Atur campuran, isi data, dan temukan KAO secara otomatis.</div></div>'
+            f'<div class="hero-art">{svg}</div></div>')
+
+
+def _idn(x, nd=2):
+    return f"{x:,.{nd}f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _dash_html(mix, K, W, tot, mhb, ok_n, ok_c, Pb, Pbr, kadar, rm_n, kao):
+    """Dasbor ringkasan: 5 kartu 3D + stepper progres."""
+    def card(cls, ic, lb, vl, sb):
+        return f'<div class="kpi {cls}"><div class="ic">{ic}</div><div class="lb">{lb}</div><div class="vl">{vl}</div><div class="sb">{sb}</div></div>'
+    c1 = card("k1", "🧱", "Jenis campuran", mix, f"Konstanta K = {_idn(K, 2)}")
+    if W > 0:
+        wa = W * kadar / 100
+        c2 = card("k2", "⚖️", "Berat campuran", f"{_idn(W, 0)} gr", f"Aspal {_idn(wa, 1)} gr · Agregat {_idn(W - wa, 1)} gr")
+    else:
+        c2 = card("k2", "⚖️", "Berat campuran", "Belum diisi", "Isi di sidebar")
+    if tot > 0 and ok_c:
+        c3 = card("k3", "📊", "Gradasi sampel", f"{ok_n}/{ok_c} masuk batas", f"MHB {_idn(mhb, 2)}")
+    else:
+        c3 = card("k3", "📊", "Gradasi sampel", "Belum diisi", "Isi massa di Tab 1")
+    c4 = card("k4", "🛢️", "Pb estimasi", f"{_idn(Pb, 2)}%", f"Dibulatkan {_idn(Pbr, 1)}% · dipakai {_idn(kadar, 1)}%")
+    if kao is not None:
+        c5 = card("k5", "🎯", "Kadar aspal optimum", f"KAO {_idn(kao, 1)}%", "Dari uji Marshall")
+    elif rm_n:
+        c5 = card("k6", "🎯", "Kadar aspal optimum", "Belum ditentukan", "Cek syarat di Tab 4")
+    else:
+        c5 = card("k6", "🎯", "Kadar aspal optimum", "Belum ada data", "Isi uji Marshall di Tab 4")
+    steps = [("Atur campuran", W > 0), ("Isi massa saringan", tot > 0), ("Kadar aspal & variasi", W > 0 and tot > 0),
+             ("Data Marshall", rm_n > 0), ("KAO ditemukan", kao is not None)]
+    now = next((i for i, (_, d) in enumerate(steps) if not d), None)
+    done_n = sum(d for _, d in steps)
+    sp_html = ""
+    for i, (nm, d) in enumerate(steps):
+        cls = "done" if d else ("now" if i == now else "")
+        sp_html += f'<div class="stp {cls}"><div class="dot">{"✓" if d else i + 1}</div>{nm}</div>'
+    return (f'<div class="dash">{c1}{c2}{c3}{c4}{c5}</div>'
+            f'<div class="steps-wrap"><div class="steps-ttl">Progres pekerjaan: {done_n} dari {len(steps)} langkah</div>'
+            f'<div class="steps">{sp_html}</div></div>')
+
+
+
+def _mini_logo():
+    cx, W2, H2 = 32, 26, 13
+    L = [(6, 4, "#3A4048", "#20242A", "#2B3036"), (20, 5, "#5E6874", "#38404A", "#47505B"), (34, 7, "#C2AE82", "#8E7E5C", "#A69468")]
+    out = ""
+    for cy, t, top, lf, rt in reversed(L):
+        out += (f'<polygon points="{cx - W2},{cy + H2} {cx},{cy + 2 * H2} {cx},{cy + 2 * H2 + t} {cx - W2},{cy + H2 + t}" fill="{lf}"/>'
+                f'<polygon points="{cx},{cy + 2 * H2} {cx + W2},{cy + H2} {cx + W2},{cy + H2 + t} {cx},{cy + 2 * H2 + t}" fill="{rt}"/>'
+                f'<polygon points="{cx},{cy} {cx + W2},{cy + H2} {cx},{cy + 2 * H2} {cx - W2},{cy + H2}" fill="{top}" stroke="rgba(255,255,255,.2)"/>')
+    out += f'<line x1="{cx - 13}" y1="{4 + 6.5}" x2="{cx + 13}" y2="{4 + 19.5}" stroke="#FBBF24" stroke-width="2" stroke-dasharray="5 4" stroke-linecap="round"/>'
+    return f'<svg viewBox="0 0 64 62" xmlns="http://www.w3.org/2000/svg">{out}</svg>'
+
+
+def _brand_html():
+    return (f'<div class="sb-brand">{_mini_logo()}<div><b>GradAspal</b><small>Gradasi, Pb, dan KAO<br>untuk perkerasan lentur</small></div></div>')
+
+
+def _side_html(mix, W, Pb, kadar, tot, ok_n, ok_c, rm_n, kao):
+    def row(a, b, cls=""):
+        return f'<div class="sbrow"><span>{a}</span><b class="{cls}">{b}</b></div>'
+    done = [W > 0, tot > 0, W > 0 and tot > 0, rm_n > 0, kao is not None]
+    pct = int(sum(done) / len(done) * 100)
+    r = row("Campuran", mix)
+    r += row("Berat", f"{_idn(W, 0)} gr" if W > 0 else "belum diisi", "ok" if W > 0 else "no")
+    r += row("Gradasi", f"{ok_n}/{ok_c} masuk" if tot > 0 and ok_c else "belum diisi",
+             ("ok" if ok_n == ok_c else "no") if tot > 0 and ok_c else "no")
+    r += row("Pb estimasi", f"{_idn(Pb, 2)}%")
+    r += row("KAO", f"{_idn(kao, 1)}%" if kao is not None else "belum ada", "ok" if kao is not None else "no")
+    return (f'<div class="sbcard"><div class="sbc-t">📌 Ringkasan cepat</div>{r}'
+            f'<div class="sbbar"><i style="width:{pct}%"></i></div><div class="sbpct">Progres {pct}%</div></div>')
+
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&display=swap');
@@ -742,11 +868,19 @@ st.markdown("""
 [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { color: var(--asp9); }
 
 /* ---------- hero */
-.hero { position: relative; overflow: hidden; background: linear-gradient(120deg, #14202E 0%, #243B53 55%, #3E5C7E 100%);
-        padding: 1.7rem 2rem 2rem 2rem; border-radius: 18px; margin-bottom: 1.3rem;
-        box-shadow: 0 10px 26px rgba(20,32,46,.30); }
+.hero { position: relative; overflow: hidden; display: grid; grid-template-columns: 1.15fr .95fr; align-items: center; gap: .5rem;
+        background: linear-gradient(120deg, #101A26 0%, #1C3047 50%, #3E5C7E 100%);
+        padding: 1.6rem 2rem 2.2rem 2rem; border-radius: 20px; margin-bottom: 1.1rem;
+        box-shadow: 0 10px 0 -3px #0B131D, 0 24px 40px rgba(20,32,46,.38); }
+.hero-txt { position: relative; z-index: 2; }
+.hero-art { position: relative; z-index: 2; display: flex; justify-content: center; }
+.hero-art svg { width: 100%; max-width: 430px; height: auto; filter: drop-shadow(0 14px 16px rgba(0,0,0,.45)); }
+.slab { animation: floaty 4.8s ease-in-out infinite; }
+@keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+.tagline { position: relative; margin-top: .55rem; color: #FDE68A; font-weight: 600; font-size: .95rem; }
+@keyframes roadmove { from { background-position: 0 0; } to { background-position: 58px 0; } }
 .hero::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 7px;
-        background: repeating-linear-gradient(90deg, #F59E0B 0 34px, transparent 34px 58px); }
+        background: repeating-linear-gradient(90deg, #F59E0B 0 34px, transparent 34px 58px); animation: roadmove 2s linear infinite; }
 .hero::before { content: ""; position: absolute; right: -60px; top: -70px; width: 260px; height: 260px; border-radius: 50%;
         background: radial-gradient(circle, rgba(245,158,11,.30) 0%, rgba(245,158,11,0) 70%); }
 .hero h1 { position: relative; color: #FFFFFF; margin: 0; font-size: 2.4rem; letter-spacing: .4px;
@@ -795,15 +929,89 @@ st.markdown("""
 [data-testid="stPlotlyChart"] { background: #FFFFFF; border-radius: 14px; padding: 6px;
         box-shadow: 0 3px 14px rgba(20,32,46,.10); border: 1px solid #DCE6F0; }
 [data-testid="stExpander"] { border-radius: 12px; background: rgba(255,255,255,.75); border: 1px solid #DCE6F0; }
+
+/* ---------- dasbor 3D */
+.dash { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin: .3rem 0 1.1rem 0; perspective: 1200px; }
+.kpi { position: relative; overflow: hidden; border-radius: 18px; padding: .85rem 1rem 1rem 1rem; color: #fff; min-height: 134px;
+       transform: rotateX(5deg); transform-origin: 50% 100%; transition: transform .25s ease, box-shadow .25s ease;
+       box-shadow: 0 1px 0 rgba(255,255,255,.35) inset, 0 8px 0 -1px rgba(0,0,0,.28), 0 18px 28px rgba(20,32,46,.30); }
+.kpi::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+       background: linear-gradient(155deg, rgba(255,255,255,.28) 0%, rgba(255,255,255,0) 46%); }
+.kpi:hover { transform: rotateX(0deg) translateY(-9px) scale(1.03);
+       box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 12px 0 -1px rgba(0,0,0,.28), 0 28px 38px rgba(20,32,46,.38); }
+.kpi .ic { position: absolute; right: .75rem; top: .55rem; font-size: 2rem; filter: drop-shadow(0 5px 4px rgba(0,0,0,.35)); }
+.kpi .lb { font-size: .72rem; text-transform: uppercase; letter-spacing: .9px; font-weight: 700; opacity: .88; max-width: 75%; }
+.kpi .vl { font-family: 'Poppins', 'Source Sans Pro', sans-serif; font-size: 1.22rem; font-weight: 700; line-height: 1.2; margin: 1.25rem 0 .25rem 0; }
+.kpi .sb { font-size: .78rem; opacity: .92; }
+.k1 { background: linear-gradient(135deg, #14202E, #34506E); }
+.k2 { background: linear-gradient(135deg, #1D4E89, #3B8BD9); }
+.k3 { background: linear-gradient(135deg, #0B7A75, #2BB3A6); }
+.k4 { background: linear-gradient(135deg, #D97706, #F5A524); }
+.k5 { background: linear-gradient(135deg, #0E7C57, #22C58B); }
+.k6 { background: linear-gradient(135deg, #5B6B7D, #8CA0B5); }
+
+.steps-wrap { background: #FFFFFF; border-radius: 18px; padding: .8rem 1.2rem 1rem 1.2rem; margin-bottom: 1.2rem;
+       box-shadow: 0 8px 0 -3px #C7D6E6, 0 16px 28px rgba(20,32,46,.12); }
+.steps-ttl { font-weight: 700; color: #243B53; font-size: .88rem; margin-bottom: .6rem; }
+.steps { display: flex; }
+.stp { flex: 1; position: relative; text-align: center; font-size: .78rem; font-weight: 600; color: #7B8CA0; padding: 0 .2rem; }
+.stp .dot { width: 36px; height: 36px; margin: 0 auto .4rem auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+       background: #E6EDF5; color: #7B8CA0; font-weight: 800; box-shadow: 0 4px 0 #C7D6E6; position: relative; z-index: 2; }
+.stp:not(:last-child)::after { content: ""; position: absolute; top: 16px; left: calc(50% + 24px); right: calc(-50% + 24px); height: 5px;
+       border-radius: 3px; background: #E6EDF5; z-index: 1; }
+.stp.done { color: #14202E; }
+.stp.done .dot { background: linear-gradient(135deg, #F59E0B, #F97316); color: #fff; box-shadow: 0 4px 0 #B45309, 0 8px 12px rgba(245,158,11,.45); }
+.stp.done:not(:last-child)::after { background: linear-gradient(90deg, #F59E0B, #F97316); }
+.stp.now { color: #14202E; }
+.stp.now .dot { background: #243B53; color: #fff; box-shadow: 0 4px 0 #14202E; animation: pulse 1.7s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 4px 0 #14202E, 0 0 0 0 rgba(36,59,83,.5); } 70% { box-shadow: 0 4px 0 #14202E, 0 0 0 12px rgba(36,59,83,0); } 100% { box-shadow: 0 4px 0 #14202E, 0 0 0 0 rgba(36,59,83,0); } }
+
+/* ---------- efek 3D umum */
+.stDownloadButton button { box-shadow: 0 5px 0 #B45309, 0 12px 18px rgba(245,158,11,.38); }
+.stDownloadButton button:active { transform: translateY(4px); box-shadow: 0 1px 0 #B45309, 0 4px 8px rgba(245,158,11,.3); }
+.stButton button { box-shadow: 0 4px 0 #B8C8D9, 0 8px 14px rgba(20,32,46,.12); }
+.stButton button:active { transform: translateY(3px); box-shadow: 0 1px 0 #B8C8D9; }
+[data-testid="stMetric"] { transition: transform .2s ease, box-shadow .2s ease; box-shadow: 0 6px 0 -2px #D5E1EE, 0 12px 20px rgba(20,32,46,.10); }
+[data-testid="stMetric"]:hover { transform: translateY(-5px) rotateX(3deg); box-shadow: 0 10px 0 -2px #D5E1EE, 0 22px 30px rgba(20,32,46,.16); }
+[data-testid="stDataFrame"], [data-testid="stPlotlyChart"] { box-shadow: 0 7px 0 -2px #D5E1EE, 0 16px 26px rgba(20,32,46,.12); }
+.stTabs [aria-selected="true"], [data-testid="stTab"][aria-selected="true"] { box-shadow: 0 -3px 0 #F59E0B inset, 0 6px 14px rgba(20,32,46,.25); }
+
+/* ---------- sidebar hidup */
+.sb-brand { position: relative; overflow: hidden; display: flex; align-items: center; gap: .7rem; padding: .8rem .9rem 1rem .9rem;
+        border-radius: 16px; color: #fff; margin: .2rem 0 1rem 0; background: linear-gradient(135deg, #101A26, #2A4764);
+        box-shadow: 0 6px 0 -1px #0B131D, 0 14px 22px rgba(20,32,46,.32); }
+.sb-brand::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
+        background: repeating-linear-gradient(90deg, #F59E0B 0 18px, transparent 18px 32px); animation: roadmove 2s linear infinite; }
+.sb-brand svg { width: 58px; height: auto; flex: none; filter: drop-shadow(0 5px 5px rgba(0,0,0,.45)); }
+.sb-brand b { font-family: 'Poppins', 'Source Sans Pro', sans-serif; font-size: 1.2rem; display: block; line-height: 1.1; }
+.sb-brand small { color: #C9D8E8; font-size: .72rem; line-height: 1.25; display: block; margin-top: .2rem; }
+.sb-title { display: inline-block; font-family: 'Poppins', 'Source Sans Pro', sans-serif; font-weight: 700; font-size: .92rem; color: #fff;
+        background: linear-gradient(135deg, #243B53, #3E5C7E); padding: .3rem .9rem; border-radius: 999px;
+        box-shadow: 0 4px 0 #14202E, 0 8px 12px rgba(20,32,46,.25); margin: .5rem 0 .8rem 0; }
+.sbcard { background: #FFFFFF; border-radius: 16px; border-top: 4px solid #F59E0B; padding: .7rem .95rem .85rem .95rem; margin: .1rem 0 1rem 0;
+        box-shadow: 0 6px 0 -2px #C7D6E6, 0 12px 20px rgba(20,32,46,.14); transition: transform .2s ease; }
+.sbcard:hover { transform: translateY(-3px); }
+.sbc-t { font-weight: 800; color: #14202E; font-size: .86rem; margin-bottom: .35rem; }
+.sbrow { display: flex; justify-content: space-between; gap: .6rem; padding: .3rem 0; border-bottom: 1px dashed #DCE6F0; font-size: .79rem; color: #486581; }
+.sbrow b { color: #14202E; text-align: right; }
+.sbrow b.ok { color: #0E7C57; } .sbrow b.no { color: #B45309; }
+.sbbar { height: 9px; background: #E6EDF5; border-radius: 6px; overflow: hidden; margin-top: .65rem; box-shadow: inset 0 1px 2px rgba(0,0,0,.18); }
+.sbbar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, #F59E0B, #F97316); transition: width .4s ease; }
+.sbpct { font-size: .7rem; color: #7B8CA0; text-align: right; margin-top: .2rem; font-weight: 600; }
+.sbtips { background: linear-gradient(135deg, #FFF7E0, #FDE9B3); border-radius: 16px; padding: .75rem .95rem; font-size: .78rem; color: #5B3A06;
+        box-shadow: 0 5px 0 -2px #F0C766, 0 10px 18px rgba(245,158,11,.22); margin-top: 1rem; }
+.sbtips b { display: block; margin-bottom: .3rem; font-size: .84rem; }
+.sbtips ul { margin: .2rem 0 0 1.05rem; padding: 0; } .sbtips li { margin-bottom: .2rem; }
+.sbfoot { text-align: center; color: #7B8CA0; font-size: .7rem; margin: .9rem 0 .3rem 0; }
+@media (max-width: 1050px) { .dash { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 820px) { .hero { grid-template-columns: 1fr; } .hero-art { display: none; } .dash { grid-template-columns: repeat(2, 1fr); }
+        .stp { font-size: .66rem; } .stp .dot { width: 30px; height: 30px; } }
+@media (max-width: 520px) { .dash { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .hero { padding: 1rem 1.2rem 1.5rem 1.2rem; } .hero h1 { font-size: 1.7rem; }
         .stTabs [data-baseweb="tab"], [data-testid="stTab"] { padding: .45rem .7rem; } }
 </style>
-<div class="hero">
-  <h1>🛣️ GradAspal</h1>
-  <p>Perencanaan gradasi agregat, kadar aspal estimasi, dan kadar aspal optimum (uji Marshall) untuk Latasir, Lataston, dan Laston</p>
-  <div class="chips"><span>Latasir</span><span>Lataston</span><span>Laston</span><span>Uji Marshall</span><span>Tanpa login</span></div>
-</div>
-""", unsafe_allow_html=True)
+__HERO__
+""".replace("__HERO__", _hero_html()), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------- sidebar (tanpa login)
 ver = st.session_state.get("ver", 0)
@@ -812,9 +1020,11 @@ tag = f"app_{ver}"
 if not st.session_state.get("visited"):
     log_visit("anonim", "buka aplikasi")
     st.session_state["visited"] = True
+st.sidebar.markdown(_brand_html(), unsafe_allow_html=True)
+side_sum = st.sidebar.container()
 st.sidebar.caption("Langsung pakai, tanpa login. Data tidak disimpan di server. Simpan pekerjaanmu lewat **Arsip pekerjaan** di bawah.")
 
-st.sidebar.markdown("### 📁 Arsip pekerjaan")
+st.sidebar.markdown('<div class="sb-title">📁 Arsip pekerjaan</div>', unsafe_allow_html=True)
 if st.session_state.get("flash"):
     st.sidebar.success(st.session_state.pop("flash"))
 up = st.sidebar.file_uploader("Buka arsip (.json)", type=["json"], key=f"up_{ver}",
@@ -836,7 +1046,7 @@ if st.sidebar.button("Mulai baru (kosongkan semua isian)"):
     st.rerun()
 judul = st.sidebar.text_input("Judul arsip (opsional)", value=str(sv.get("judul", "")),
                               placeholder="Contoh: Kelompok 3 - Laston AC-WC", key=f"judul_{tag}")
-st.sidebar.divider()
+st.sidebar.markdown('<div class="sb-title">⚙️ Pengaturan campuran</div>', unsafe_allow_html=True)
 mix_list = list(SPEC)
 mix0 = sv.get("mix") if sv.get("mix") in SPEC else "Laston AC-WC"
 mix = st.sidebar.selectbox("Jenis campuran", mix_list, index=mix_list.index(mix0), key=f"mix_{tag}")
@@ -854,6 +1064,7 @@ if not lo_k <= K <= hi_k:
     st.sidebar.warning("K di luar rentang yang lazim.")
 sp = SPEC[mix]
 
+dash = st.container()
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["1. Analisis Saringan", "2. Gradasi Rencana",
                                               "3. Kadar Aspal, Berat & Koreksi", "4. Uji Marshall & KAO",
                                               "5. Pusat Bantuan & Panduan", "6. Riwayat Akses (Admin)"])
@@ -1347,3 +1558,22 @@ with tab6:
         st.error("Kode admin salah.")
     else:
         st.caption("Tab ini hanya untuk pemilik aplikasi. Masukkan kode admin untuk melihat riwayat.")
+
+# ------------------------------------------------------------------ dasbor ringkasan (diisi setelah semua perhitungan)
+ok_n = ok_c = 0
+if tot > 0:
+    for _i, _sz in enumerate(LAB):
+        if _sz in sp:
+            _lo, _hi = sp[_sz]
+            ok_c += 1
+            ok_n += int(_lo - 0.005 <= lw[_i] <= _hi + 0.005)
+with dash:
+    st.markdown(_dash_html(mix, K, W, tot, (mhb if tot > 0 else 0.0), ok_n, ok_c, Pb, Pbr, kadar, len(rm), kao),
+                unsafe_allow_html=True)
+with side_sum:
+    st.markdown(_side_html(mix, W, Pb, kadar, tot, ok_n, ok_c, len(rm), kao), unsafe_allow_html=True)
+st.sidebar.markdown(
+    '<div class="sbtips"><b>💡 Tips cepat</b><ul><li>Isi berat campuran dulu.</li>'
+    '<li>Isi massa saringan di Tab 1, lalu data Marshall di Tab 4.</li>'
+    '<li>Simpan arsip sebelum menutup halaman.</li><li>Bingung? Buka Tab 5.</li></ul></div>'
+    '<div class="sbfoot">GradAspal · Praktikum Perkerasan Lentur</div>', unsafe_allow_html=True)
