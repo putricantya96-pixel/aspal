@@ -854,6 +854,9 @@ def _side_html(mix, W, Pb, kadar, tot, ok_n, ok_c, rm_n, kao):
             f'<div class="sbbar"><i style="width:{pct}%"></i></div><div class="sbpct">Progres {pct}%</div></div>')
 
 
+if "started" not in st.session_state:
+    st.session_state["started"] = st.query_params.get("mulai") == "1"
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&display=swap');
@@ -1011,7 +1014,90 @@ st.markdown("""
         .stTabs [data-baseweb="tab"], [data-testid="stTab"] { padding: .45rem .7rem; } }
 </style>
 __HERO__
-""".replace("__HERO__", _hero_html()), unsafe_allow_html=True)
+""".replace("__HERO__", _hero_html() if st.session_state.get("started") else ""), unsafe_allow_html=True)
+
+# ------------------------------------------------------------------ halaman sambutan (3D jalan aspal)
+_LANDING_CSS = """
+<style>
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"], [data-testid="stHeader"],
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stMainBlockContainer"] { padding-top: 1.2rem !important; }
+.lp { position: relative; height: 560px; border-radius: 24px; overflow: hidden;
+      background: linear-gradient(180deg, #060B16 0%, #0F2036 28%, #2A3F66 45%, #D9803A 58%, #F9C26B 62%);
+      box-shadow: 0 12px 0 -3px #0B131D, 0 30px 48px rgba(20,32,46,.5); animation: lpin .9s ease both; }
+@keyframes lpin { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: none; } }
+.lp-stars { position: absolute; inset: 0 0 50% 0; opacity: .9;
+      background-image: radial-gradient(1.6px 1.6px at 8% 12%, #fff 50%, transparent 52%), radial-gradient(1.2px 1.2px at 22% 30%, #fff 50%, transparent 52%),
+        radial-gradient(1.8px 1.8px at 35% 8%, #fff 50%, transparent 52%), radial-gradient(1.2px 1.2px at 48% 22%, #fff 50%, transparent 52%),
+        radial-gradient(1.6px 1.6px at 61% 10%, #fff 50%, transparent 52%), radial-gradient(1.2px 1.2px at 74% 26%, #fff 50%, transparent 52%),
+        radial-gradient(1.8px 1.8px at 86% 14%, #fff 50%, transparent 52%), radial-gradient(1.2px 1.2px at 94% 34%, #fff 50%, transparent 52%),
+        radial-gradient(1.2px 1.2px at 15% 40%, #fff 50%, transparent 52%), radial-gradient(1.2px 1.2px at 68% 40%, #fff 50%, transparent 52%);
+      animation: twinkle 3.2s ease-in-out infinite; }
+@keyframes twinkle { 0%, 100% { opacity: .95; } 50% { opacity: .55; } }
+.lp-sun { position: absolute; left: 50%; top: 62%; width: 190px; height: 190px; margin: -112px 0 0 -95px; border-radius: 50%;
+      background: radial-gradient(circle, #FFF6CF 0%, #FFC857 38%, rgba(255,160,60,.55) 56%, rgba(255,160,60,0) 72%); }
+.lp-mount { position: absolute; left: 0; width: 100%; top: calc(62% - 122px); height: 124px; }
+.lp-ground { position: absolute; left: 0; right: 0; bottom: 0; top: 62%; background: linear-gradient(180deg, #2A4233 0%, #14231B 100%); }
+.lp-roadwrap { position: absolute; left: 0; right: 0; top: 62%; bottom: 0; overflow: hidden; perspective: 300px; perspective-origin: 50% 0%; }
+.lp-road { position: absolute; left: 50%; bottom: 0; width: 1500px; height: 4200px; margin-left: -750px; transform-origin: 50% 100%;
+      transform: rotateX(68deg); background-color: #272C33;
+      background-image: radial-gradient(rgba(255,255,255,.10) 1.2px, transparent 1.6px), radial-gradient(rgba(0,0,0,.28) 1.4px, transparent 1.8px),
+        linear-gradient(90deg, #1E2329 0%, #2B3139 50%, #1E2329 100%);
+      background-size: 11px 11px, 17px 17px, 100% 100%; background-position: 0 0, 6px 8px, 0 0; }
+.lp-shoulder { position: absolute; top: 0; bottom: 0; width: 8%; background: linear-gradient(90deg, #4B525C, #39404A); }
+.lp-shoulder.l { left: 0; } .lp-shoulder.r { right: 0; }
+.lp-edge { position: absolute; top: 0; bottom: 0; width: 26px; background: #F2F5F9; box-shadow: 0 0 22px rgba(255,255,255,.55); }
+.lp-edge.l { left: 11%; } .lp-edge.r { right: 11%; }
+.lp-center { position: absolute; top: 0; bottom: 0; left: 50%; width: 30px; margin-left: -15px;
+      background: repeating-linear-gradient(to bottom, #FBBF24 0 120px, transparent 120px 300px); animation: lprun .75s linear infinite; }
+@keyframes lprun { from { background-position: 0 0; } to { background-position: 0 300px; } }
+.lp-fog { position: absolute; left: 0; right: 0; top: 62%; height: 120px; pointer-events: none;
+      background: linear-gradient(180deg, rgba(249,194,107,.75) 0%, rgba(249,194,107,0) 100%); }
+.lp-txt { position: absolute; left: 0; right: 0; top: 6%; text-align: center; padding: 0 1rem; z-index: 3; }
+.lp-hi { color: #FDE68A; letter-spacing: 5px; font-weight: 700; font-size: .95rem; animation: lpup .9s .15s ease both; }
+.lp-title { font-family: 'Poppins', 'Source Sans Pro', sans-serif; font-weight: 800; font-size: 4.6rem; line-height: 1.05; color: #fff; margin: .15rem 0 .3rem 0;
+      text-shadow: 0 1px 0 #dbe4ee, 0 2px 0 #c3cfdd, 0 3px 0 #aab9cb, 0 4px 0 #91a3b9, 0 5px 0 #788ca7, 0 6px 0 #5f7594, 0 7px 0 #475f81,
+                   0 8px 0 #34496a, 0 22px 26px rgba(0,0,0,.55);
+      animation: lpup .9s .3s ease both, lpfloat 4.5s 1.2s ease-in-out infinite; }
+.lp-sub { color: #E4ECF6; font-size: 1.05rem; max-width: 640px; margin: 0 auto .8rem auto; text-shadow: 0 2px 6px rgba(0,0,0,.5); animation: lpup .9s .5s ease both; }
+.lp-chips span { display: inline-block; margin: 0 .3rem .3rem .3rem; padding: .15rem .85rem; border-radius: 999px; font-size: .82rem; font-weight: 700; color: #FDE68A;
+      background: rgba(10,20,34,.55); border: 1px solid rgba(253,230,138,.55); animation: lpup .9s .7s ease both; }
+@keyframes lpup { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+@keyframes lpfloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+[data-testid="stHorizontalBlock"] { margin-top: -92px; position: relative; z-index: 10; }
+[data-testid="stBaseButton-primary"], .stButton button[kind="primary"] { font-size: 1.45rem; font-weight: 800; padding: .85rem 1.2rem; border-radius: 18px; border: none;
+      background: linear-gradient(135deg, #FBBF24, #F97316); color: #14202E;
+      box-shadow: 0 8px 0 #B45309, 0 20px 30px rgba(249,115,22,.5); animation: lpglow 1.8s ease-in-out infinite; }
+[data-testid="stBaseButton-primary"]:hover, .stButton button[kind="primary"]:hover { background: linear-gradient(135deg, #F59E0B, #EA580C); color: #fff; transform: translateY(-3px); }
+[data-testid="stBaseButton-primary"]:active, .stButton button[kind="primary"]:active { transform: translateY(6px); box-shadow: 0 2px 0 #B45309, 0 6px 10px rgba(249,115,22,.4); }
+[data-testid="stBaseButton-primary"] p, .stButton button[kind="primary"] p { font-size: 1.55rem !important; font-weight: 800 !important; letter-spacing: 1px; }
+@keyframes lpglow { 0%, 100% { box-shadow: 0 8px 0 #B45309, 0 18px 28px rgba(249,115,22,.40); } 50% { box-shadow: 0 8px 0 #B45309, 0 24px 44px rgba(251,191,36,.75); } }
+.lp-note { text-align: center; color: #486581; font-size: .85rem; margin-top: .9rem; font-weight: 600; }
+@media (max-width: 700px) { .lp { height: 500px; } .lp-title { font-size: 2.7rem; } .lp-sub { font-size: .9rem; } .lp-hi { letter-spacing: 3px; font-size: .78rem; } }
+</style>
+<div class="lp">
+  <div class="lp-stars"></div>
+  <div class="lp-sun"></div>
+  <svg class="lp-mount" viewBox="0 0 1000 124" preserveAspectRatio="none"><path d="M0,124 L0,80 L90,42 L170,84 L260,32 L360,90 L450,54 L560,94 L650,38 L760,88 L850,48 L940,82 L1000,60 L1000,124 Z" fill="#0F1B2B"/><path d="M0,124 L0,98 L120,72 L220,100 L330,68 L450,102 L580,74 L700,104 L820,72 L920,100 L1000,82 L1000,124 Z" fill="#17304A"/></svg>
+  <div class="lp-ground"></div>
+  <div class="lp-roadwrap"><div class="lp-road"><div class="lp-shoulder l"></div><div class="lp-shoulder r"></div><div class="lp-edge l"></div><div class="lp-edge r"></div><div class="lp-center"></div></div></div>
+  <div class="lp-fog"></div>
+  <div class="lp-txt"><div class="lp-hi">SELAMAT DATANG DI APLIKASI</div><div class="lp-title">GradAspal</div>
+  <div class="lp-sub">Rancang gradasi agregat, hitung kadar aspal, dan temukan kadar aspal optimum (KAO) secara otomatis.</div>
+  <div class="lp-chips"><span>Latasir</span><span>Lataston</span><span>Laston</span><span>Uji Marshall</span><span>Ekspor Excel</span></div></div>
+</div>
+"""
+if not st.session_state["started"]:
+    st.markdown(_LANDING_CSS, unsafe_allow_html=True)
+    _c1, _c2, _c3 = st.columns([1, 1.15, 1])
+    with _c2:
+        if st.button("🚧  Mulai", key="btn_mulai", type="primary", use_container_width=True):
+            st.session_state["started"] = True
+            st.rerun()
+    st.markdown('<div class="lp-note">Gratis · tanpa login · data tidak disimpan di server</div>', unsafe_allow_html=True)
+    st.stop()
+
+
 
 # ---------------------------------------------------------------- sidebar (tanpa login)
 ver = st.session_state.get("ver", 0)
