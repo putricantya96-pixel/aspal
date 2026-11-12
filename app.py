@@ -9,10 +9,24 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
+import importlib.util as _ilu
+
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
+
+# Pengaman: jika paket tambahan belum terpasang, tampilkan petunjuk yang jelas (bukan traceback merah)
+_BELUM = [m for m in ("plotly", "openpyxl") if _ilu.find_spec(m) is None]
+if _BELUM:
+    st.set_page_config(page_title="GradAspal", page_icon="🛣️")
+    st.error("Aplikasi belum bisa dijalankan: paket **" + ", ".join(_BELUM) + "** belum terpasang di server.")
+    st.markdown("**Cara memperbaiki:** buka repo GitHub aplikasi ini, lalu isi file `requirements.txt` "
+                "(di folder yang sama dengan `app.py`) dengan baris berikut. Setelah itu klik **Commit changes**, "
+                "buka **Manage app**, pilih **Reboot app**, dan tunggu 1-3 menit.")
+    st.code("streamlit\npandas\nnumpy\nopenpyxl\nplotly", language="text")
+    st.stop()
+
+import plotly.graph_objects as go
 from openpyxl import Workbook
 from openpyxl.chart import Reference, ScatterChart, Series
 from openpyxl.chart.axis import ChartLines
@@ -39,8 +53,9 @@ SPEC = {
 K_DEF = {"Latasir": 2.5, "Lataston": 2.5, "Laston": 0.75}
 K_RNG = {"Latasir": (2.0, 3.0), "Lataston": (2.0, 3.0), "Laston": (0.5, 1.0)}
 
-# Syarat Marshall Laston (Spesifikasi Umum 2018): (min, maks); None = tidak dibatasi
-_MQ = (250.0, None)
+# Syarat Marshall Laston (Spesifikasi Umum 2018, Tabel 12.2): (min, maks); None = tidak dibatasi.
+# MQ tidak ada di Tabel 12.2, jadi tidak dibatasi (boleh diisi di aplikasi jika modul mensyaratkan, mis. min 250).
+_MQ = (None, None)
 MSPEC = {
     "Laston AC-WC": {"VIM (%)": (3.0, 5.0), "VMA (%)": (15.0, None), "VFA (%)": (65.0, None),
                      "Stabilitas (kg)": (800.0, None), "Flow (mm)": (2.0, 4.0), "MQ (kg/mm)": _MQ},
@@ -66,6 +81,41 @@ def f_korelasi(vol):
     xs = [(a + b) / 2 for a, b, _ in KORELASI]
     ys = [c for _, _, c in KORELASI]
     return round(float(np.interp(vol, xs, ys)), 2)
+
+
+# Angka korelasi berdasarkan tebal benda uji (mm), SNI 06-2489-1991 (urutan sama dengan KORELASI)
+KORELASI_TEBAL = [25.4, 27.0, 28.6, 30.2, 31.8, 33.3, 34.9, 36.5, 38.1, 39.7, 41.3, 42.9, 44.4, 46.0, 47.6, 49.2, 50.8,
+                  52.4, 54.0, 55.6, 57.2, 58.7, 60.3, 61.9, 63.5, 65.1, 66.7, 68.3, 69.8, 71.4, 73.0, 74.6, 76.2]
+assert len(KORELASI_TEBAL) == len(KORELASI)
+
+
+def f_korelasi_tebal(tebal):
+    """Angka korelasi dari tebal benda uji (mm), interpolasi linear antar baris tabel SNI."""
+    return round(float(np.interp(tebal, KORELASI_TEBAL, [c for _, _, c in KORELASI])), 2)
+
+
+def tabel_lembar_kerja(rm):
+    """Hasil Marshall dalam format lembar kerja praktikum: tiap benda uji + baris rata-rata per kadar aspal."""
+    kol = [("Kadar Aspal (%)", "Kadar Aspal (%)"), ("Berat di udara (F) gr", "Berat Kering (gr)"),
+           ("Berat dalam air (G) gr", "Berat dalam Air (gr)"), ("Berat SSD (H) gr", "Berat SSD (gr)"),
+           ("Volume (I = H - G) cm3", "Volume (cm3)"), ("BJ Bulk Gmb (J = F / I)", "BJ Bulk Campuran"),
+           ("VIM (K) %", "VIM (%)"), ("VMA (L) %", "VMA (%)"), ("VFB (M) %", "VFA (%)"),
+           ("Stabilitas bacaan (N)", "Pembacaan"), ("Tebal (mm)", "Tebal (mm)"), ("Angka korelasi", "Angka Korelasi"),
+           ("Stabilitas terkoreksi (O) kg", "Stabilitas (kg)"), ("Flow (P) mm", "Flow (mm)"), ("MQ (Q = O / P) kg/mm", "MQ (kg/mm)")]
+    out = []
+    for kd, g in rm.sort_values(["Kadar Aspal (%)", "No"]).groupby("Kadar Aspal (%)", sort=True):
+        for _, r in g.iterrows():
+            row = {"Benda uji": str(int(r["No"]))}
+            for lab, src in kol:
+                row[lab] = float(r[src]) if src in rm.columns and not pd.isna(r.get(src)) else np.nan
+            out.append(row)
+        mrow = {"Benda uji": "rata-rata"}
+        for lab, src in kol:
+            mrow[lab] = float(g[src].mean()) if src in g.columns and g[src].notna().any() else np.nan
+        mrow["Kadar Aspal (%)"] = float(kd)
+        out.append(mrow)
+    return pd.DataFrame(out, columns=["Benda uji"] + [k for k, _ in kol])
+
 
 # Saringan hasil praktikum (mm); baris terakhir tabel input = pan
 LAB = [76.2, 63.5, 50.8, 37.5, 19, 12.5, 9.5, 4.75, 2.36, 1.18, 0.6, 0.3, 0.15, 0.075]
@@ -322,6 +372,44 @@ def _grad_chart(mix, wsg, n, ws_s=None, mid=False):
     return ch
 
 
+# ------------------------------------------------------------------ berat jenis dari berat hasil pengujian
+def bj_kasar(bk, bj, ba):
+    """Agregat kasar (SNI 1969): Bk kering oven, Bj SSD di udara, Ba SSD dalam air."""
+    if not (bk and bj and ba):
+        return None
+    d = bj - ba
+    if d <= 0 or bk - ba <= 0:
+        return None
+    return {"bulk": bk / d, "ssd": bj / d, "semu": bk / (bk - ba), "serap": (bj - bk) / bk * 100}
+
+
+def bj_halus(bk, b, bt, s):
+    """Agregat halus (SNI 1970): Bk kering oven, B piknometer+air, Bt piknometer+benda uji+air, S benda uji SSD."""
+    if not (bk and b and bt and s):
+        return None
+    d, d2 = b + s - bt, b + bk - bt
+    if d <= 0 or d2 <= 0:
+        return None
+    return {"bulk": bk / d, "ssd": s / d, "semu": bk / d2, "serap": (s - bk) / bk * 100}
+
+
+def bj_filler(bk, b, bt):
+    """Filler (piknometer): satu nilai berat jenis, dipakai untuk bulk dan semu."""
+    if not (bk and b and bt):
+        return None
+    d = b + bk - bt
+    return bk / d if d > 0 else None
+
+
+def bj_aspal(a, b, c, d):
+    """Aspal (SNI 2441): A piknometer kosong, B +air, C +aspal, D +aspal+air."""
+    if not (a and b and c and d):
+        return None
+    den = (b - a) - (d - c)
+    return (c - a) / den if den > 0 and c > a else None
+
+
+
 def xlsx_gradasi(mix, W, K, kadar, Pbr, m, kadar_list, labels):
     """Workbook Tab 1-3: semua angka turunan berupa rumus yang saling terhubung + grafik Excel."""
     sp = SPEC[mix]
@@ -523,7 +611,7 @@ def xlsx_gradasi(mix, W, K, kadar, Pbr, m, kadar_list, labels):
     return buf.getvalue()
 
 
-def xlsx_marshall(mix, specs, bj, kal_in, unit, props, rows_in, kadar_vals):
+def xlsx_marshall(mix, specs, bj, kal_in, unit, props, rows_in, kadar_vals, raw=None):
     """Workbook Tab 4: VMA/VIM/VFA/stabilitas/MQ, rata-rata, cek syarat, KAO berupa rumus + 6 grafik Excel."""
     wb = Workbook()
     wsi = wb.active
@@ -574,18 +662,59 @@ def xlsx_marshall(mix, specs, bj, kal_in, unit, props, rows_in, kadar_vals):
     _widths(wsi, [38, 16, 48])
     _legend(wsi, "A20")
 
+    # ---- Berat jenis dari berat hasil pengujian (rumus), menggantikan isian langsung di sheet Input
+    if raw is not None:
+        wsb = wb.create_sheet("Berat Jenis", 1)
+        blk = [
+            (1, "AGREGAT KASAR (SNI 1969)", [("Berat benda uji kering oven, Bk (gr)", "k_bk"), ("Berat benda uji SSD di udara, Bj (gr)", "k_bj"),
+                                              ("Berat benda uji SSD dalam air, Ba (gr)", "k_ba")]),
+            (10, "AGREGAT HALUS (SNI 1970)", [("Berat benda uji kering oven, Bk (gr)", "h_bk"), ("Berat piknometer + air, B (gr)", "h_b"),
+                                               ("Berat piknometer + benda uji + air, Bt (gr)", "h_bt"), ("Berat benda uji SSD, S (gr)", "h_s")]),
+            (20, "FILLER (piknometer)", [("Berat filler kering, Bk (gr)", "f_bk"), ("Berat piknometer + air, B (gr)", "f_b"),
+                                         ("Berat piknometer + filler + air, Bt (gr)", "f_bt")]),
+            (26, "ASPAL (SNI 2441)", [("Berat piknometer kosong, A (gr)", "a_a"), ("Berat piknometer + air, B (gr)", "a_b"),
+                                      ("Berat piknometer + aspal, C (gr)", "a_c"), ("Berat piknometer + aspal + air, D (gr)", "a_d")]),
+        ]
+        for r0, ttl, items in blk:
+            wsb.cell(r0, 1, ttl)
+            _hdr(wsb, r0, 2)
+            for j, (lb, key) in enumerate(items, 1):
+                wsb.cell(r0 + j, 1, lb)
+                _inp(wsb.cell(r0 + j, 2, _num(raw.get(key))))
+        res = [
+            (5, "BJ bulk", '=IFERROR(B2/(B3-B4),"")'), (6, "BJ SSD", '=IFERROR(B3/(B3-B4),"")'),
+            (7, "BJ semu", '=IFERROR(B2/(B2-B4),"")'), (8, "Penyerapan (%)", '=IFERROR((B3-B2)/B2*100,"")'),
+            (15, "BJ bulk", '=IFERROR(B11/(B12+B14-B13),"")'), (16, "BJ SSD", '=IFERROR(B14/(B12+B14-B13),"")'),
+            (17, "BJ semu", '=IFERROR(B11/(B12+B11-B13),"")'), (18, "Penyerapan (%)", '=IFERROR((B14-B11)/B11*100,"")'),
+            (24, "BJ filler (dipakai sebagai bulk dan semu)", '=IFERROR(B21/(B22+B21-B23),"")'),
+            (31, "BJ aspal", '=IFERROR((B29-B27)/((B28-B27)-(B30-B29)),"")'),
+        ]
+        for r_, lb, fx in res:
+            wsb.cell(r_, 1, lb).font = Font(name="Arial", bold=True)
+            wsb.cell(r_, 2, fx).number_format = "0.0000"
+        _widths(wsb, [46, 16])
+        _legend(wsb, "A33")
+        # sheet Input mengambil nilai dari sheet Berat Jenis
+        for r_, ref in {2: "B5", 3: "B15", 4: "B24", 5: "B7", 6: "B17", 7: "B24", 8: "B31"}.items():
+            c_ = wsi.cell(r_, 2, f"='Berat Jenis'!{ref}")
+            c_.fill = PatternFill(fill_type=None)
+            c_.font = Font(name="Arial", color="000000")
+            c_.number_format = "0.0000"
+            wsi.cell(r_, 3, "Dihitung otomatis dari sheet Berat Jenis")
+
     # ---- Tabel korelasi
-    wst.append(["Isi min (cm3)", "Isi maks (cm3)", "Titik tengah", "Angka korelasi"])
-    _hdr(wst, 1, 4)
+    wst.append(["Isi min (cm3)", "Isi maks (cm3)", "Titik tengah", "Angka korelasi", "Tebal benda uji (mm)"])
+    _hdr(wst, 1, 5)
     for i, (a, b, c) in enumerate(KORELASI, 2):
         wst.cell(i, 1, a)
         wst.cell(i, 2, b)
         wst.cell(i, 3, f"=(A{i}+B{i})/2")
         wst.cell(i, 4, c)
+        wst.cell(i, 5, KORELASI_TEBAL[i - 2])
     k1, k2 = 2, len(KORELASI) + 1
-    wst.cell(k2 + 2, 1, "Sumber: SNI 06-2489-1991. Angka korelasi untuk volume di antara titik tengah diinterpolasi linear.").font = \
+    wst.cell(k2 + 2, 1, "Sumber: SNI 06-2489-1991. Angka korelasi untuk volume di antara titik tengah diinterpolasi linear. Kolom tebal dipakai bila angka korelasi ditentukan dari tebal benda uji.").font = \
         Font(name="Arial", italic=True, color="7F7F7F", size=9)
-    _widths(wst, [14, 14, 14, 16])
+    _widths(wst, [14, 14, 14, 16, 20])
 
     # ---- Per benda uji
     cols_m = list(rows_in.columns)
@@ -1318,30 +1447,106 @@ with tab4:
                                placeholder="Isi", help=help_, key=f"m_{key}_{tag}")
 
     st.markdown("**1. Berat jenis bahan**")
-    r1 = st.columns(3)
-    with r1[0]:
-        bulk_k = pnum("BJ bulk agregat kasar", "kasar_bulk")
-    with r1[1]:
-        bulk_h = pnum("BJ bulk agregat halus", "halus_bulk")
-    with r1[2]:
-        bulk_f = pnum("BJ bulk filler", "filler_bulk")
-    r2 = st.columns(3)
-    with r2[0]:
-        semu_k = pnum("BJ semu agregat kasar", "kasar_semu")
-    with r2[1]:
-        semu_h = pnum("BJ semu agregat halus", "halus_semu")
-    with r2[2]:
-        semu_f = pnum("BJ semu filler", "filler_semu")
-    r3 = st.columns(3)
-    with r3[0]:
-        bj_asp = pnum("BJ aspal", "aspal")
-    with r3[1]:
-        kal_in = pnum("Faktor kalibrasi alat (per skala pembacaan)", "kal",
-                      "Faktor proving ring dari alat Marshall di laboratoriummu.")
-    with r3[2]:
-        unit = st.radio("Satuan faktor kalibrasi", ["kg", "lbs"], horizontal=True,
-                        index=1 if mp.get("unit") == "lbs" else 0, key=f"m_unit_{tag}",
-                        help="Jika faktor di modulmu dalam lbs, pilih lbs. Aplikasi mengubahnya ke kg (x 0,45359).")
+    raw = dict(mp.get("raw") or {})
+    _has_direct = any(mp.get(k_) for k_ in ("kasar_bulk", "halus_bulk", "filler_bulk", "kasar_semu", "halus_semu", "filler_semu", "aspal"))
+    MODE_H, MODE_L = "Hitung otomatis dari berat hasil pengujian", "Isi langsung nilai berat jenis"
+    _def_h = mp.get("bj_mode") == "hitung" or (mp.get("bj_mode") is None and not _has_direct)
+    hitung = st.radio("Cara mengisi berat jenis", [MODE_H, MODE_L], horizontal=True, index=0 if _def_h else 1,
+                      key=f"m_bjmode_{tag}") == MODE_H
+
+    def rnum(label, key, help_=None, default=None):
+        v = raw.get(key, default)
+        return st.number_input(label, min_value=0.0, value=float(v) if v else None, step=0.01, format="%.2f",
+                               placeholder="Isi", help=help_, key=f"r_{key}_{tag}")
+
+    if hitung:
+        st.caption("Isi berat hasil pengujian di laboratorium (satuan gram). Berat jenis bulk, SSD, semu, dan penyerapan "
+                   "terhitung otomatis, lalu dipakai untuk VMA, VIM, dan VFA.")
+        cK, cH = st.columns(2)
+        with cK:
+            st.markdown("**Agregat kasar** (SNI 1969)")
+            k_bk = rnum("Berat benda uji kering oven, Bk (gr)", "k_bk")
+            k_bj = rnum("Berat benda uji SSD di udara, Bj (gr)", "k_bj")
+            k_ba = rnum("Berat benda uji SSD dalam air, Ba (gr)", "k_ba")
+        with cH:
+            st.markdown("**Agregat halus** (SNI 1970)")
+            h_bk = rnum("Berat benda uji kering oven, Bk (gr)", "h_bk")
+            h_b = rnum("Berat piknometer + air, B (gr)", "h_b")
+            h_bt = rnum("Berat piknometer + benda uji + air, Bt (gr)", "h_bt")
+            h_s = rnum("Berat benda uji SSD, S (gr)", "h_s", "Biasanya 500 gr.", default=500)
+        cF, cA = st.columns(2)
+        with cF:
+            st.markdown("**Filler** (piknometer)")
+            f_bk = rnum("Berat filler kering, Bk (gr)", "f_bk")
+            f_b = rnum("Berat piknometer + air, B (gr)", "f_b")
+            f_bt = rnum("Berat piknometer + filler + air, Bt (gr)", "f_bt")
+        with cA:
+            st.markdown("**Aspal** (SNI 2441)")
+            a_a = rnum("Berat piknometer kosong, A (gr)", "a_a")
+            a_b = rnum("Berat piknometer + air, B (gr)", "a_b")
+            a_c = rnum("Berat piknometer + aspal, C (gr)", "a_c")
+            a_d = rnum("Berat piknometer + aspal + air, D (gr)", "a_d")
+        raw = {"k_bk": k_bk, "k_bj": k_bj, "k_ba": k_ba, "h_bk": h_bk, "h_b": h_b, "h_bt": h_bt, "h_s": h_s,
+               "f_bk": f_bk, "f_b": f_b, "f_bt": f_bt, "a_a": a_a, "a_b": a_b, "a_c": a_c, "a_d": a_d}
+        rk, rh = bj_kasar(k_bk, k_bj, k_ba), bj_halus(h_bk, h_b, h_bt, h_s)
+        rf, ra_ = bj_filler(f_bk, f_b, f_bt), bj_aspal(a_a, a_b, a_c, a_d)
+        for nm, vals, res, tip in [
+            ("Agregat kasar", (k_bk, k_bj, k_ba), rk, "Berat SSD harus lebih besar dari berat dalam air, dan berat kering harus lebih besar dari berat dalam air."),
+            ("Agregat halus", (h_bk, h_b, h_bt, h_s), rh, "Periksa berat piknometer. Berat B + S harus lebih besar dari Bt."),
+            ("Filler", (f_bk, f_b, f_bt), rf, "Periksa berat piknometer. Berat B + Bk harus lebih besar dari Bt."),
+            ("Aspal", (a_a, a_b, a_c, a_d), ra_, "Periksa urutan berat: A < C, dan D harus sesuai (piknometer + aspal + air)."),
+        ]:
+            if any(vals) and res is None and all(vals):
+                st.warning(f"{nm}: angka belum masuk akal. {tip}")
+        bulk_k, semu_k = (rk["bulk"], rk["semu"]) if rk else (None, None)
+        bulk_h, semu_h = (rh["bulk"], rh["semu"]) if rh else (None, None)
+        bulk_f = semu_f = rf
+        bj_asp = ra_
+        _f = lambda v_, nd=4: "-" if v_ is None else f"{v_:.{nd}f}"
+        _t = pd.DataFrame([
+            ["Agregat kasar", _f(rk and rk["bulk"]), _f(rk and rk["ssd"]), _f(rk and rk["semu"]), _f(rk and rk["serap"], 2)],
+            ["Agregat halus", _f(rh and rh["bulk"]), _f(rh and rh["ssd"]), _f(rh and rh["semu"]), _f(rh and rh["serap"], 2)],
+            ["Filler", _f(rf), "-", _f(rf), "-"],
+            ["Aspal", "-", "-", _f(ra_), "-"],
+        ], columns=["Bahan", "BJ bulk", "BJ SSD", "BJ semu (aspal: BJ)", "Penyerapan (%)"])
+        st.markdown("**Hasil perhitungan berat jenis (otomatis)**")
+        st.dataframe(_t, hide_index=True, width="stretch")
+        st.caption("Filler dan aspal hanya punya satu nilai berat jenis. Untuk filler, nilai itu dipakai sebagai BJ bulk dan BJ semu.")
+        if rk and rk["bulk"] > rk["semu"] or rh and rh["bulk"] > rh["semu"]:
+            st.warning("BJ bulk tidak mungkin lebih besar dari BJ semu. Periksa kembali berat yang kamu isi.")
+        r3 = st.columns(3)
+        with r3[0]:
+            kal_in = pnum("Faktor kalibrasi alat (per skala pembacaan)", "kal",
+                          "Faktor proving ring dari alat Marshall di laboratoriummu.")
+        with r3[1]:
+            unit = st.radio("Satuan faktor kalibrasi", ["kg", "lbs"], horizontal=True,
+                            index=1 if mp.get("unit") == "lbs" else 0, key=f"m_unit_{tag}",
+                            help="Jika faktor di modulmu dalam lbs, pilih lbs. Aplikasi mengubahnya ke kg (x 0,45359).")
+    else:
+        r1 = st.columns(3)
+        with r1[0]:
+            bulk_k = pnum("BJ bulk agregat kasar", "kasar_bulk")
+        with r1[1]:
+            bulk_h = pnum("BJ bulk agregat halus", "halus_bulk")
+        with r1[2]:
+            bulk_f = pnum("BJ bulk filler", "filler_bulk")
+        r2 = st.columns(3)
+        with r2[0]:
+            semu_k = pnum("BJ semu agregat kasar", "kasar_semu")
+        with r2[1]:
+            semu_h = pnum("BJ semu agregat halus", "halus_semu")
+        with r2[2]:
+            semu_f = pnum("BJ semu filler", "filler_semu")
+        r3 = st.columns(3)
+        with r3[0]:
+            bj_asp = pnum("BJ aspal", "aspal")
+        with r3[1]:
+            kal_in = pnum("Faktor kalibrasi alat (per skala pembacaan)", "kal",
+                          "Faktor proving ring dari alat Marshall di laboratoriummu.")
+        with r3[2]:
+            unit = st.radio("Satuan faktor kalibrasi", ["kg", "lbs"], horizontal=True,
+                            index=1 if mp.get("unit") == "lbs" else 0, key=f"m_unit_{tag}",
+                            help="Jika faktor di modulmu dalam lbs, pilih lbs. Aplikasi mengubahnya ke kg (x 0,45359).")
     kal_kg = (kal_in * 0.45359237 if unit == "lbs" else kal_in) if kal_in else None
     if kal_kg:
         st.caption(f"Faktor kalibrasi yang dipakai: {kal_kg:.4f} kg per skala.")
@@ -1361,7 +1566,7 @@ with tab4:
         g2.metric("BJ semu agregat gabungan", f"{Gsa:.4f}")
         g3.metric("BJ efektif agregat gabungan", f"{Gse:.4f}")
     else:
-        st.info("Isi semua berat jenis (bulk, semu, aspal) agar VMA, VIM, dan VFA bisa dihitung.")
+        st.info("Lengkapi berat hasil pengujian berat jenis (agregat kasar, halus, filler, dan aspal) agar VMA, VIM, dan VFA bisa dihitung." if hitung else "Isi semua berat jenis (bulk, semu, aspal) agar VMA, VIM, dan VFA bisa dihitung.")
 
     st.markdown("**2. Syarat spesifikasi**")
     base_sp = MSPEC.get(mix, {})
@@ -1369,7 +1574,10 @@ with tab4:
                         "Min": [(base_sp.get(p) or (None, None))[0] if base_sp.get(p) and base_sp[p][0] is not None else np.nan for p in MPARAMS],
                         "Maks": [(base_sp.get(p) or (None, None))[1] if base_sp.get(p) and base_sp[p][1] is not None else np.nan for p in MPARAMS]})
     if base_sp:
-        st.caption(f"Syarat {mix} sesuai Spesifikasi Umum 2018 (Tabel 12.1 laporan). Boleh diubah jika modulmu berbeda.")
+        st.caption(f"Syarat {mix} sesuai Spesifikasi Umum 2018 (Tabel 12.2 laporan). Boleh diubah jika modulmu berbeda. "
+                   "MQ tidak ada di Tabel 12.2, jadi tidak dibatasi (isi min 250 jika modulmu mensyaratkan). "
+                   f"Jumlah tumbukan per bidang: {'112' if mix == 'Laston AC-Base' else '75'}. "
+                   "Stabilitas Marshall sisa (min 90%) dan rongga refusal (min 2%) tidak dihitung aplikasi ini.")
     else:
         st.caption(f"Syarat untuk {mix} belum terisi otomatis. Isi sendiri sesuai spesifikasi yang kamu pakai.")
     sed = st.data_editor(sdf, hide_index=True, disabled=["Parameter"], width="stretch", key=f"ms_{tag}_{mix}",
@@ -1378,10 +1586,19 @@ with tab4:
     specs = {r_["Parameter"]: (r_["Min"], r_["Maks"]) for _, r_ in sed.iterrows()}
 
     st.markdown("**3. Data benda uji**")
+    kor_opts = ["Dari volume benda uji", "Dari tebal benda uji (mm)"]
+    kor_mode = st.radio("Penentuan angka korelasi stabilitas", kor_opts, horizontal=True,
+                        index=1 if mp.get("kor_mode") == "tebal" else 0, key=f"m_kor_{tag}",
+                        help="Volume = berat SSD - berat dalam air (otomatis). Tebal = hasil pengukuran tebal benda uji dengan jangka sorong. "
+                             "Keduanya memakai tabel SNI 06-2489-1991 dengan interpolasi.")
+    kor_tebal = kor_mode == kor_opts[1]
     st.caption("Satu baris per benda uji. Boleh lebih dari satu benda uji per kadar aspal (hasilnya dirata-rata). "
-               "Tambah baris lewat tombol + di bawah tabel. Kadar aspal terhadap campuran. Kosongkan angka korelasi agar dihitung otomatis dari volume.")
+               "Tambah baris lewat tombol + di bawah tabel. Kadar aspal terhadap campuran. "
+               + ("Isi kolom Tebal Benda Uji (mm) untuk tiap benda uji. " if kor_tebal else "Kolom Tebal Benda Uji boleh dikosongkan. ")
+               + "Kolom Angka Korelasi (opsional) dikosongkan agar dihitung otomatis; jika diisi, angka itu yang dipakai.")
+    C_TB, C_KOR = "Tebal Benda Uji (mm)", "Angka Korelasi (opsional)"
     cols_m = ["Kadar Aspal (%)", "Berat Kering (gr)", "Berat SSD (gr)", "Berat dalam Air (gr)",
-              "Pembacaan Stabilitas", "Flow (mm)", "Angka Korelasi (opsional)"]
+              "Pembacaan Stabilitas", "Flow (mm)", C_TB, C_KOR]
     saved_rows = msv.get("rows") or []
     if saved_rows:
         base_m = pd.DataFrame(saved_rows, columns=cols_m).astype(float)
@@ -1390,14 +1607,15 @@ with tab4:
     ed_m = st.data_editor(base_m, num_rows="dynamic", hide_index=True, width="stretch", key=f"mr_{tag}",
                           column_config={c_: st.column_config.NumberColumn(c_, min_value=0.0, format="%.3f") for c_ in cols_m})
 
-    recs, warn_vol = [], []
+    recs, warn_vol, warn_tb, kosong_tb, beda_kor, kor_eff = [], [], [], [], [], {}
     for i_, rw in ed_m.reset_index(drop=True).iterrows():
         pbv, bk_, bs_, ba_ = rw[cols_m[0]], rw[cols_m[1]], rw[cols_m[2]], rw[cols_m[3]]
         if any(pd.isna(x) for x in (pbv, bk_, bs_, ba_)) or bs_ - ba_ <= 0 or not 0 < pbv < 100:
             continue
         vol = bs_ - ba_
         gmb = bk_ / vol
-        rec = {"No": i_ + 1, "Kadar Aspal (%)": float(pbv), "Volume (cm3)": vol, "BJ Bulk Campuran": gmb}
+        rec = {"No": i_ + 1, "Kadar Aspal (%)": float(pbv), "Berat Kering (gr)": float(bk_), "Berat dalam Air (gr)": float(ba_),
+               "Berat SSD (gr)": float(bs_), "Volume (cm3)": vol, "BJ Bulk Campuran": gmb}
         if bj_ok:
             ps = 100 - pbv
             gmm = 100 / (ps / Gse + pbv / bj_asp)
@@ -1406,9 +1624,30 @@ with tab4:
             rec.update({"BJ Teoritis Maks": gmm, "VMA (%)": vma, "VIM (%)": vim, "VFA (%)": 100 * (vma - vim) / vma})
         if not 200 <= vol <= 625:
             warn_vol.append(i_ + 1)
-        fk = rw[cols_m[6]] if not pd.isna(rw[cols_m[6]]) else f_korelasi(vol)
+        tb_ = rw[C_TB]
+        has_tb = not pd.isna(tb_) and tb_ > 0
+        f_vol = f_korelasi(vol)
+        f_tb = f_korelasi_tebal(tb_) if has_tb else None
+        if has_tb:
+            rec["Tebal (mm)"] = float(tb_)
+            if not 25.4 - 0.05 <= tb_ <= 76.2 + 0.05:
+                warn_tb.append(i_ + 1)
+            if abs(f_tb - f_vol) > 0.1:
+                beda_kor.append(i_ + 1)
+        if not pd.isna(rw[C_KOR]):
+            fk, dasar = float(rw[C_KOR]), "Manual"
+        elif kor_tebal and has_tb:
+            fk, dasar = f_tb, "Tebal"
+            kor_eff[i_] = f_tb
+        else:
+            fk, dasar = f_vol, "Volume"
+            if kor_tebal:
+                kosong_tb.append(i_ + 1)
         rec["Angka Korelasi"] = fk
+        rec["Dasar Korelasi"] = dasar
         rd_, fl_ = rw[cols_m[4]], rw[cols_m[5]]
+        if not pd.isna(rd_):
+            rec["Pembacaan"] = float(rd_)
         if kal_kg and not pd.isna(rd_):
             rec["Stabilitas (kg)"] = rd_ * kal_kg * fk
             if not pd.isna(fl_) and fl_ > 0:
@@ -1417,6 +1656,12 @@ with tab4:
         elif not pd.isna(fl_):
             rec["Flow (mm)"] = fl_
         recs.append(rec)
+
+    # data untuk Excel: kolom angka korelasi diisi dari tebal bila memilih tebal (7 kolom, tanpa kolom tebal)
+    x_rows = ed_m.drop(columns=[C_TB]).reset_index(drop=True)
+    for i_, v_ in kor_eff.items():
+        if pd.isna(x_rows.at[i_, C_KOR]):
+            x_rows.at[i_, C_KOR] = v_
 
     ra = None
     kao = None
@@ -1430,12 +1675,39 @@ with tab4:
         if warn_vol:
             st.warning(f"Volume benda uji nomor {', '.join(map(str, warn_vol))} di luar rentang tabel korelasi (200-625 cm3). "
                        "Cek kembali berat SSD dan berat dalam air.")
+        if warn_tb:
+            st.warning(f"Tebal benda uji nomor {', '.join(map(str, warn_tb))} di luar rentang tabel korelasi (25,4-76,2 mm). "
+                       "Cek kembali pengukuran tebal (satuan mm).")
+        if kosong_tb:
+            st.info(f"Tebal benda uji nomor {', '.join(map(str, kosong_tb))} belum diisi, jadi angka korelasinya memakai volume.")
+        if beda_kor:
+            st.warning(f"Pada benda uji nomor {', '.join(map(str, beda_kor))}, angka korelasi dari tebal dan dari volume berbeda lebih dari 0,1. "
+                       "Cek kembali pengukuran tebal atau penimbangan (berat SSD dan berat dalam air).")
         if not kal_kg:
             st.info("Isi faktor kalibrasi alat agar stabilitas dan MQ dihitung.")
         st.markdown("**Hasil per benda uji**")
-        show_cols = [c_ for c_ in ["No", "Kadar Aspal (%)", "Volume (cm3)", "BJ Bulk Campuran", "BJ Teoritis Maks", "VMA (%)", "VIM (%)",
-                                   "VFA (%)", "Angka Korelasi", "Stabilitas (kg)", "Flow (mm)", "MQ (kg/mm)"] if c_ in rm.columns]
-        st.dataframe(rm[show_cols].round(3), hide_index=True, width="stretch")
+        tampil = st.radio("Tampilan hasil", ["Ringkas", "Format lembar kerja"], horizontal=True, key=f"m_view_{tag}",
+                          help="Format lembar kerja = kolom F sampai Q seperti tabel data Marshall di praktikum, lengkap dengan baris rata-rata per kadar aspal.")
+        if tampil == "Ringkas":
+            show_cols = [c_ for c_ in ["No", "Kadar Aspal (%)", "Volume (cm3)", "BJ Bulk Campuran", "BJ Teoritis Maks", "VMA (%)", "VIM (%)",
+                                       "VFA (%)", "Tebal (mm)", "Angka Korelasi", "Dasar Korelasi", "Stabilitas (kg)", "Flow (mm)",
+                                       "MQ (kg/mm)"] if c_ in rm.columns]
+            st.dataframe(rm[show_cols].round(3), hide_index=True, width="stretch")
+        else:
+            lk = tabel_lembar_kerja(rm)
+            st.caption("Kolom F, G, H diisi hasil timbangan. I = H - G, J = F / I. K, L, M = VIM, VMA, VFB. "
+                       "N = bacaan arloji, O = N x kalibrasi x angka korelasi, P = flow, Q = O / P.")
+            try:
+                sty = lk.style.format(precision=3, na_rep="-").apply(
+                    lambda r_: ["font-weight: 700; background-color: #FFF1CC" if r_["Benda uji"] == "rata-rata" else "" for _ in r_], axis=1)
+                st.dataframe(sty, hide_index=True, width="stretch")
+            except Exception:
+                st.dataframe(lk.round(3), hide_index=True, width="stretch")
+            lbuf = io.BytesIO()
+            with pd.ExcelWriter(lbuf, engine="openpyxl") as xw_:
+                lk.round(4).to_excel(xw_, sheet_name="Format Lembar Kerja", index=False)
+            st.download_button("Unduh tabel lembar kerja (Excel)", lbuf.getvalue(), "tabel_lembar_kerja_marshall.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_lk")
 
         ra = rm.groupby("Kadar Aspal (%)", as_index=False).agg(
             **{"Jumlah Benda Uji": ("No", "count")}, **{p_: (p_, "mean") for p_ in MPARAMS})
@@ -1484,13 +1756,14 @@ with tab4:
 
         mbuf = xlsx_marshall(mix, specs, {"kasar_bulk": bulk_k, "halus_bulk": bulk_h, "filler_bulk": bulk_f,
                                           "kasar_semu": semu_k, "halus_semu": semu_h, "filler_semu": semu_f,
-                                          "aspal": bj_asp}, kal_in, unit, (pCA, pFA, pFF), ed_m,
-                             list(ra["Kadar Aspal (%)"]))
+                                          "aspal": bj_asp}, kal_in, unit, (pCA, pFA, pFF), x_rows,
+                             list(ra["Kadar Aspal (%)"]), raw if hitung else None)
         st.download_button("Unduh hasil Marshall (Excel)", mbuf, "hasil_marshall.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_marshall")
 
 mparams = {"kasar_bulk": bulk_k, "halus_bulk": bulk_h, "filler_bulk": bulk_f, "kasar_semu": semu_k,
-           "halus_semu": semu_h, "filler_semu": semu_f, "aspal": bj_asp, "kal": kal_in, "unit": unit}
+           "halus_semu": semu_h, "filler_semu": semu_f, "aspal": bj_asp, "kal": kal_in, "unit": unit,
+           "bj_mode": "hitung" if hitung else "langsung", "kor_mode": "tebal" if kor_tebal else "volume", "raw": {k_: (None if v_ is None else float(v_)) for k_, v_ in raw.items()}}
 mrows = [{k_: (None if pd.isna(v_) else float(v_)) for k_, v_ in r_.items()} for r_ in ed_m.to_dict("records")]
 
 # ------------------------------------------- arsip pekerjaan (unduh)
@@ -1537,8 +1810,10 @@ with tab5:
 - Tabel **Variasi kadar aspal** memberi berat bahan untuk lima kadar (Pb -1 sampai Pb +1) untuk membuat benda uji Marshall.
 
 **Langkah 5b - Tab 4: Uji Marshall & KAO**
-- Isi berat jenis bahan (bulk, semu, aspal) dan faktor kalibrasi alat.
-- Isi data tiap benda uji: kadar aspal, berat kering, berat SSD, berat dalam air, pembacaan stabilitas, dan flow.
+- Isi berat hasil pengujian berat jenis (aplikasi menghitung BJ bulk, SSD, semu, dan penyerapan otomatis), atau isi nilai BJ langsung, lalu isi faktor kalibrasi alat.
+- Isi data tiap benda uji: kadar aspal, berat kering, berat SSD, berat dalam air, pembacaan stabilitas, flow, dan (jika diukur) tebal benda uji.
+- Pilih penentuan **angka korelasi**: dari volume (otomatis) atau dari tebal benda uji (mm).
+- Hasil bisa dilihat dalam tampilan **Ringkas** atau **Format lembar kerja** (kolom F sampai Q dengan baris rata-rata).
 - Aplikasi menghitung VMA, VIM, VFA, stabilitas, flow, dan MQ, lalu mengecek syarat dan menentukan **KAO**.
 
 **Langkah 6 - Simpan hasil**
@@ -1573,9 +1848,11 @@ with tab5:
         with st.expander("Faktor kalibrasi alat Marshall: kg atau lbs?"):
             st.write("Faktor kalibrasi (proving ring) bisa tertulis dalam lbs. Pilih satuannya di Tab 4 dan aplikasi akan "
                      "mengubahnya ke kg (1 lbs = 0,45359 kg). Stabilitas dihitung = pembacaan x faktor kalibrasi (kg) x angka korelasi.")
-        with st.expander("Dari mana angka korelasi stabilitas?"):
-            st.write("Otomatis dari volume benda uji (berat SSD - berat dalam air) memakai tabel SNI 06-2489-1991 dengan "
-                     "interpolasi. Jika modulmu memberi angka lain, isi kolom Angka Korelasi (opsional) di tabel benda uji.")
+        with st.expander("Dari mana angka korelasi stabilitas? Volume atau tebal?"):
+            st.write("Ada dua pilihan di Tab 4. (1) Dari volume: volume = berat SSD - berat dalam air, lalu dicocokkan ke tabel SNI 06-2489-1991. "
+                     "(2) Dari tebal: isi kolom Tebal Benda Uji (mm) hasil pengukuran jangka sorong, lalu dicocokkan ke tabel yang sama. "
+                     "Keduanya memakai interpolasi. Jika modulmu memberi angka lain, atau tidak mengalikan angka korelasi, isi kolom "
+                     "Angka Korelasi (opsional); isi 1 bila tidak dikoreksi.")
         with st.expander("Kenapa KAO belum muncul?"):
             st.write("KAO hanya muncul jika ada kadar aspal yang memenuhi semua syarat (VIM, VMA, VFA, stabilitas, flow, MQ). "
                      "Lihat tabel Pengecekan terhadap syarat di Tab 4 untuk tahu parameter mana yang belum terpenuhi.")
